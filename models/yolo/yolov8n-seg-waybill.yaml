@@ -1,0 +1,11 @@
+type: yolov8_seg
+name: yolov8n-seg-r20260314-train11
+provider: Custom
+display_name: YOLOv8n-Seg (Waybill) - train11
+model_path: best.onnx
+iou_threshold: 0.45
+conf_threshold: 0.25
+max_det: 300
+epsilon_factor: 0.005
+classes:
+- waybill
