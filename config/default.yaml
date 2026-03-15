@@ -11,6 +11,7 @@ yolo:
   iou_threshold: 0.7
   device: "cpu"          # "cpu" 或 "0"(GPU)
   imgsz: 960             # ONNX 导出时的输入尺寸
+  auto_install: false    # 禁止 ultralytics 自动安装缺失依赖（如 onnxruntime-gpu）
 
 # ------ 透视校正 ------
 rectifier:
@@ -20,6 +21,7 @@ rectifier:
 
 # ------ PaddleOCR ------
 ocr:
+  model_dir: "models/paddleocr"  # 模型存放根目录（det/rec/cls 子目录自动创建）
   use_angle_cls: true
   lang: "ch"
   use_gpu: false

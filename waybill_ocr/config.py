@@ -62,6 +62,10 @@ YOLO_CONF_THRESHOLD = float(_yolo.get("conf_threshold", 0.5))
 YOLO_IOU_THRESHOLD = float(_yolo.get("iou_threshold", 0.7))
 YOLO_DEVICE = str(_yolo.get("device", "cpu"))
 YOLO_IMGSZ = int(_yolo.get("imgsz", 960))
+YOLO_AUTO_INSTALL = bool(_yolo.get("auto_install", False))
+
+if not YOLO_AUTO_INSTALL:
+    os.environ.setdefault("YOLO_AUTOINSTALL", "false")
 
 # ============================================================
 # 透视校正配置
@@ -77,6 +81,7 @@ RECTIFIER_MORPH_SIZE = int(_rect.get("morph_size", 7))
 # ============================================================
 
 _ocr = _cfg.get("ocr", {})
+OCR_MODEL_DIR = _resolve_path(_ocr.get("model_dir", "models/paddleocr"))
 OCR_USE_ANGLE_CLS = bool(_ocr.get("use_angle_cls", True))
 OCR_LANG = str(_ocr.get("lang", "ch"))
 OCR_USE_GPU = bool(_ocr.get("use_gpu", False))

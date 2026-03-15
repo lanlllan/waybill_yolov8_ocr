@@ -294,6 +294,15 @@ def rectify_from_mask(image: np.ndarray, mask: np.ndarray,
     }
 
 
+def draw_mask_overlay(image: np.ndarray, mask: np.ndarray,
+                      color=(0, 200, 255), alpha: float = 0.4) -> np.ndarray:
+    """在图像上半透明叠加掩码区域。"""
+    vis = image.copy()
+    overlay = vis.copy()
+    overlay[mask > 0] = color
+    return cv2.addWeighted(overlay, alpha, vis, 1 - alpha, 0)
+
+
 def draw_quad_on_image(image: np.ndarray, pts: np.ndarray,
                        color=(0, 255, 0), thickness=2) -> np.ndarray:
     """

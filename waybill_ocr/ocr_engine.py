@@ -50,6 +50,7 @@ class WaybillOCR:
 
     def __init__(
         self,
+        model_dir: str | None = None,
         use_gpu: bool = False,
         lang: str = "ch",
         use_angle_cls: bool = True,
@@ -59,6 +60,21 @@ class WaybillOCR:
         thumbnail_size: int = 640,
     ):
         PaddleOCR = _import_paddle_ocr()
+
+        model_kwargs = {}
+        if model_dir is not None:
+            import os
+            os.makedirs(model_dir, exist_ok=True)
+            det_dir = os.path.join(model_dir, "det")
+            rec_dir = os.path.join(model_dir, "rec")
+            cls_dir = os.path.join(model_dir, "cls")
+            os.makedirs(det_dir, exist_ok=True)
+            os.makedirs(rec_dir, exist_ok=True)
+            os.makedirs(cls_dir, exist_ok=True)
+            model_kwargs["det_model_dir"] = det_dir
+            model_kwargs["rec_model_dir"] = rec_dir
+            model_kwargs["cls_model_dir"] = cls_dir
+
         self.ocr = PaddleOCR(
             use_angle_cls=use_angle_cls,
             lang=lang,
@@ -67,6 +83,7 @@ class WaybillOCR:
             det_db_box_thresh=det_db_box_thresh,
             det_db_unclip_ratio=det_db_unclip_ratio,
             show_log=False,
+            **model_kwargs,
         )
         self.thumbnail_size = thumbnail_size
 
