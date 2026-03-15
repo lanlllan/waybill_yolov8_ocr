@@ -1,0 +1,39 @@
+# Data files (keep directory structure via .gitkeep)
+data/**
+!data/
+!data/*/
+!data/**/.gitkeep
+
+# Output
+output/
+
+# Models (large binary files)
+models/yolo/*.onnx
+models/paddleocr/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Config local overrides (keep default.yaml)
+config/local.yaml
+
+# Logs
+logs/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# docs
+docs/img/**
+
+# tests
+tests/test_output/

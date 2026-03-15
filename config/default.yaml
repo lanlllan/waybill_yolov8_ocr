@@ -1,0 +1,34 @@
+# ============================================================
+# 快递单 OCR 默认配置
+# ============================================================
+# 如需覆盖，复制本文件为 config/local.yaml 并修改对应值
+# local.yaml 中只需写要覆盖的字段，其余自动使用 default.yaml 的值
+
+# ------ YOLO 分割模型 ------
+yolo:
+  model_path: "models/yolo/best.onnx"
+  conf_threshold: 0.5
+  iou_threshold: 0.7
+  device: "cpu"          # "cpu" 或 "0"(GPU)
+  imgsz: 960             # ONNX 导出时的输入尺寸
+
+# ------ 透视校正 ------
+rectifier:
+  epsilon_ratio: 0.02
+  use_convex_hull: true
+  morph_size: 7
+
+# ------ PaddleOCR ------
+ocr:
+  use_angle_cls: true
+  lang: "ch"
+  use_gpu: false
+  det_db_thresh: 0.2          # 文本区域检测阈值（降低可检测更多模糊/遮挡文字）
+  det_db_box_thresh: 0.4      # 文本框置信度阈值（降低可保留更多候选框）
+  det_db_unclip_ratio: 1.8    # 文本框扩展系数（增大可合并被遮挡断裂的文字）
+  orientation_thumbnail_size: 640
+
+# ------ 输出 ------
+output:
+  dir: "output"
+  save_debug_images: true

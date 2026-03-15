@@ -21,53 +21,71 @@ class WaybillSegmentor:
         device: str = "cpu",
         conf: float = 0.5,
         iou: float = 0.7,
+        imgsz: int = 640,
     ):
-        self.model = YOLO(model_path)
+        self.model = YOLO(model_path, task="segment")
         self.device = device
         self.conf = conf
         self.iou = iou
+        self.imgsz = imgsz
 
-    def segment(self, image: np.ndarray) -> list[dict]:
+    def segment(self, image: np.ndarray) -> tuple[list[dict], np.ndarray | None]:
         """
-        对一张图片进行分割，返回所有检测到的快递单的掩码与检测信息。
+        对一张图片进行分割，返回检测结果列表和 YOLO 标注图。
 
         Args:
             image: BGR 图像 (H, W, 3)，numpy uint8。
 
         Returns:
-            列表，每项为：
-            - mask: 二值掩码 (H, W)，uint8，255 为前景
-            - bbox: [x1, y1, x2, y2] 检测框
-            - confidence: 置信度
-            - class_id: 类别 ID
-            - class_name: 类别名（如 waybill）
+            (detections, annotated_image) 元组：
+            detections — 列表，每项含：
+                - mask: 二值掩码 (H, W)，uint8，255 为前景
+                - bbox: [x1, y1, x2, y2] 检测框
+                - confidence: 置信度
+                - class_id: 类别 ID
+                - class_name: 类别名（如 waybill）
+            annotated_image — YOLO 绘制的标注图（含掩码+bbox+标签），
+                             无检测结果时为 None。
         """
         results = self.model.predict(
             image,
             device=self.device,
             conf=self.conf,
             iou=self.iou,
+            imgsz=self.imgsz,
             verbose=False,
         )
 
         detections = []
+        annotated = None
         h, w = image.shape[:2]
 
         for r in results:
+            if annotated is None:
+                annotated = r.plot()
+
             if r.masks is None:
                 continue
             names = r.names or {}
-            for j, mask_tensor in enumerate(r.masks.data):
-                mask_np = mask_tensor.cpu().numpy()
-                mask_resized = cv2.resize(
-                    mask_np,
-                    (w, h),
-                    interpolation=cv2.INTER_LINEAR,
-                )
-                binary_mask = (mask_resized > 0.5).astype(np.uint8) * 255
+            polygons = r.masks.xy if hasattr(r.masks, "xy") and r.masks.xy is not None else None
+
+            for j in range(len(r.masks.data)):
+                if polygons is not None and j < len(polygons) and len(polygons[j]) >= 3:
+                    poly = polygons[j].astype(np.int32).reshape(-1, 1, 2)
+                    binary_mask = np.zeros((h, w), dtype=np.uint8)
+                    cv2.fillPoly(binary_mask, [poly], 255)
+                else:
+                    mask_np = r.masks.data[j].cpu().numpy()
+                    mask_resized = cv2.resize(mask_np, (w, h), interpolation=cv2.INTER_LINEAR)
+                    binary_mask = (mask_resized > 0.5).astype(np.uint8) * 255
+
+                mask_area = np.count_nonzero(binary_mask)
+                min_mask_area = h * w * 0.005
+                if mask_area < min_mask_area:
+                    continue
 
                 box = r.boxes[j]
-                bbox = box.xyxy.cpu().numpy().flatten()  # shape (4,) 供 pipeline 使用 .tolist()
+                bbox = box.xyxy.cpu().numpy().flatten()
                 conf = float(box.conf.cpu().numpy().item())
                 cls_id = int(box.cls.cpu().numpy().item())
                 cls_name = names.get(cls_id, "waybill")
@@ -80,4 +98,4 @@ class WaybillSegmentor:
                     "class_name": cls_name,
                 })
 
-        return detections
+        return detections, annotated

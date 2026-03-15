@@ -4,61 +4,110 @@
 
 ```
 原始图片 → [阶段1] YOLO分割 → [阶段2] 透视校正 → [阶段3] 方向矫正 → [阶段4] PaddleOCR → 文字输出
+                  ↓                    ↓                                        ↓
+           yolo_annotated.jpg    0_rectified.jpg                          0_ocr.txt
+                                                                        0_result.json
 ```
 
 ## 项目目录结构
-
-**`waybill_ocr/`** 为自包含的项目根目录，代码、模型、数据、输出全部在此。
 
 ```
 waybill_ocr/                        ← 项目根目录
 ├── waybill_ocr/                    # 核心代码包
 │   ├── __init__.py                 # 导出 WaybillSegmentor + rectifier 函数
-│   ├── config.py                   # 所有配置参数，路径基于 PROJECT_ROOT
-│   ├── segmentor.py                # 阶段1：YOLO 分割
-│   ├── rectifier.py                # 阶段2：透视校正
+│   ├── config.py                   # 从 YAML 加载配置，支持 local.yaml 覆盖
+│   ├── segmentor.py                # 阶段1：YOLO 分割 + 标注图生成
+│   ├── rectifier.py                # 阶段2：透视校正（含 bbox 扩展）
 │   ├── ocr_engine.py               # 阶段3+4：方向矫正 + PaddleOCR 识别
 │   ├── ocr_engine_stub.py          # OCR 占位（未装 PaddleOCR 时自动降级）
-│   └── pipeline.py                 # 阶段5：主流程串联
+│   └── pipeline.py                 # 主流程串联 + 结果文件输出
 ├── models/
 │   ├── yolo/
-│   │   ├── best.onnx               # YOLOv8n-Seg waybill（从 export5 转入）
+│   │   ├── best.onnx               # YOLOv8n-Seg waybill（ONNX，输入 960×960）
 │   │   └── yolov8n-seg-waybill.yaml
-│   └── paddleocr/                  # PaddleOCR 本地缓存（可选，首次运行自动下载）
+│   └── paddleocr/                  # PaddleOCR 本地缓存（首次运行自动下载）
+├── config/
+│   ├── default.yaml                # 默认配置（随仓库提交）
+│   └── local.yaml                  # 本地覆盖（.gitignore 已忽略）
 ├── data/
-│   ├── input/                      # 放入待处理图片
+│   ├── input/                      # 放入待处理图片（.gitignore 忽略内容）
 │   └── samples/                    # 样例/测试图片
-├── output/                         # 识别结果、调试图、JSON
+├── output/                         # 识别结果（按图片名分子文件夹）
 ├── tests/
 │   ├── test_rectifier.py           # 透视校正验证脚本（已通过）
 │   ├── __init__.py
-│   └── test_output/                # 测试输出图片（各角度+不规则掩码）
+│   └── test_output/                # 测试输出图片
 ├── docs/
 │   └── DESIGN.md                   # 本文档
-├── config/                         # 运行时配置覆盖（可选，预留）
 ├── logs/                           # 运行日志（预留）
 ├── requirements.txt                # Python 依赖
 ├── run_ocr.py                      # 入口脚本
+├── .gitignore
 └── README.md                       # 项目说明
 ```
 
-## 配置说明（config.py）
+### 输出目录结构
 
-所有路径基于 `PROJECT_ROOT`（`waybill_ocr/` 目录），无外部依赖。
+每张输入图片生成独立的子文件夹：
+
+```
+output/
+├── 206-0/                          # 图片名（去扩展名）
+│   ├── yolo_annotated.jpg          # YOLO 标注图（掩码+bbox+标签+置信度）
+│   ├── 0_rectified.jpg             # 透视校正后的快递单图片
+│   ├── 0_ocr.txt                   # OCR 提取的纯文本
+│   └── 0_result.json               # 完整结果（含置信度、坐标、行信息）
+└── results.json                    # 汇总 JSON（--json 参数开启）
+```
+
+多个快递单时按编号 `0_`、`1_`、`2_` 依次生成。
+
+## 配置说明
+
+### 配置加载机制
+
+配置从 YAML 文件加载，支持两级覆盖：
+
+1. `config/default.yaml` — 默认配置（随仓库提交）
+2. `config/local.yaml` — 本地覆盖（.gitignore 忽略，不提交）
+
+`local.yaml` 中只需写要覆盖的字段，其余自动使用 `default.yaml` 的值（深度合并）。
+
+### 配置项一览
 
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
-| `YOLO_MODEL_PATH` | `models/yolo/best.onnx` | YOLO 分割模型路径 |
-| `YOLO_CONF_THRESHOLD` | `0.5` | 检测置信度阈值 |
-| `YOLO_IOU_THRESHOLD` | `0.7` | NMS IoU 阈值 |
-| `YOLO_DEVICE` | `"cpu"` | 推理设备，`"cpu"` 或 `"0"`(GPU) |
-| `OCR_USE_ANGLE_CLS` | `True` | PaddleOCR 启用方向分类 |
-| `OCR_LANG` | `"ch"` | 中英文混合 |
-| `OCR_USE_GPU` | `False` | OCR 使用 GPU |
-| `OCR_DET_DB_THRESH` | `0.3` | 文本检测阈值（低值检测小字） |
-| `ORIENTATION_THUMBNAIL_SIZE` | `640` | 方向矫正时缩略图最长边 |
-| `OUTPUT_DIR` | `output/` | 输出目录 |
-| `SAVE_DEBUG_IMAGES` | `True` | 保存中间步骤调试图 |
+| **YOLO 分割** | | |
+| `yolo.model_path` | `models/yolo/best.onnx` | YOLO 分割模型路径 |
+| `yolo.conf_threshold` | `0.5` | 检测置信度阈值 |
+| `yolo.iou_threshold` | `0.7` | NMS IoU 阈值 |
+| `yolo.device` | `"cpu"` | 推理设备，`"cpu"` 或 `"0"`(GPU) |
+| `yolo.imgsz` | `960` | ONNX 模型导出时的输入尺寸 |
+| **透视校正** | | |
+| `rectifier.epsilon_ratio` | `0.02` | 轮廓近似精度系数 |
+| `rectifier.use_convex_hull` | `true` | 是否使用凸包平滑 |
+| `rectifier.morph_size` | `7` | 形态学核大小 |
+| **PaddleOCR** | | |
+| `ocr.use_angle_cls` | `true` | 启用方向分类（处理 0°/180°） |
+| `ocr.lang` | `"ch"` | 中英文混合 |
+| `ocr.use_gpu` | `false` | OCR 使用 GPU |
+| `ocr.det_db_thresh` | `0.2` | 文本区域检测阈值（低值检测模糊/遮挡文字） |
+| `ocr.det_db_box_thresh` | `0.4` | 文本框置信度阈值（低值保留更多候选框） |
+| `ocr.det_db_unclip_ratio` | `1.8` | 文本框扩展系数（大值合并断裂文字） |
+| `ocr.orientation_thumbnail_size` | `640` | 方向矫正时缩略图最长边 |
+| **输出** | | |
+| `output.dir` | `"output"` | 输出目录 |
+| `output.save_debug_images` | `true` | 保存中间步骤图片 |
+
+### 本地覆盖示例 (`config/local.yaml`)
+
+```yaml
+yolo:
+  device: "0"       # 切换到 GPU
+ocr:
+  use_gpu: true
+  det_db_thresh: 0.15
+```
 
 ## 各阶段详细说明
 
@@ -66,19 +115,22 @@ waybill_ocr/                        ← 项目根目录
 
 ### 阶段 1：YOLO 分割（segmentor.py）
 
-**状态：已实现，未验证**
+**状态：已完成，已验证 ✓**
 
-- **模型**：YOLOv8n-Seg，1 个类别 `waybill`，ONNX 格式
-- **类**：`WaybillSegmentor(model_path, device, conf, iou)`
-- **方法**：`segment(image: np.ndarray) -> list[dict]`
+- **模型**：YOLOv8n-Seg，1 个类别 `waybill`，ONNX 格式（输入 960×960）
+- **类**：`WaybillSegmentor(model_path, device, conf, iou, imgsz)`
+  - 加载时指定 `task="segment"` 解决 ONNX 元数据丢失问题
+- **方法**：`segment(image) -> tuple[list[dict], np.ndarray | None]`
 - **输入**：BGR 图像 (H, W, 3)
-- **输出**：每个检测到的快递单返回：
-  - `mask`：二值掩码 (H, W)，uint8，255 为前景
-  - `bbox`：[x1, y1, x2, y2] numpy 数组
-  - `confidence`：float 置信度
-  - `class_id`：int 类别 ID
-  - `class_name`：str 类别名
-- **注意**：一张图中可能有多张快递单，逐个返回
+- **输出**：
+  - `detections`：每个检测到的快递单返回：
+    - `mask`：二值掩码 (H, W)，uint8，255 为前景
+    - `bbox`：[x1, y1, x2, y2] numpy 数组
+    - `confidence`：float 置信度
+    - `class_id`：int 类别 ID
+    - `class_name`：str 类别名
+  - `annotated_image`：YOLO 绘制的标注图（含掩码+bbox+标签）
+- **小面积过滤**：掩码面积小于图像总像素 0.5% 的检测结果自动丢弃，避免误检噪声
 
 ---
 
@@ -100,26 +152,32 @@ waybill_ocr/                        ← 项目根目录
      - 需通过凸性检查（`cv2.isContourConvex`）
    - 策略 B（兜底）：`cv2.minAreaRect` 最小外接旋转矩形
 
-3. **角点排序 `order_points()`**
+3. **bbox 扩展 `_expand_quad_with_bbox()`**（新增）
+   - 当掩码四角点覆盖范围不到 YOLO bbox 的 75% 时，用 bbox 四角替代
+   - 解决掩码不完整导致快递单内容被截断的问题
+
+4. **角点排序 `order_points()`**
    - 按 y 坐标分为上下两组，每组内按 x 区分左右
    - 输出顺序：[左上, 右上, 右下, 左下]
 
-4. **透视变换 `perspective_transform()`**
+5. **透视变换 `perspective_transform()`**
    - `cv2.getPerspectiveTransform` + `cv2.warpPerspective`
 
-5. **一步调用 `rectify_from_mask(image, mask)`**
+6. **一步调用 `rectify_from_mask(image, mask, bbox=None)`**
+   - 接受可选的 `bbox` 参数用于扩展不完整掩码
    - 返回 `rectified`（校正图）、`src_pts`、`target_size`、`cleaned_mask`
 
 #### 验证结果
 
 - 各角度（0°~180°）：角点误差 < 4px
 - 不规则掩码（突起/缺口/碎片/孔洞/综合 5 种缺陷）：角点误差 < 17px
+- 真实快递单图片：端到端验证通过
 
 ---
 
 ### 阶段 3：方向矫正（ocr_engine.py 内 `find_best_orientation`）
 
-**状态：已实现，未验证**
+**状态：已完成，已验证 ✓**
 
 #### 核心问题
 
@@ -127,21 +185,20 @@ waybill_ocr/                        ← 项目根目录
 
 #### 解决方案
 
-1. PaddleOCR 的 `use_angle_cls=True` 自动处理 0°/180°
-2. 对 90°/270°：四方向旋转择优
-   - 竖向图（h > w）：只试 0°、180°
-   - 横向图：试 0°、90°、180°、270°
+1. **0°/180° 处理**：PaddleOCR 的 `use_angle_cls=True` 自动处理，外层不再重复判断
+2. **90° 处理**：仅在横向图（w > h/0.8）时对比 0° 和 90°
    - 用缩略图（最长边 640px）做 OCR 加速
-   - 按 `文字框数量 × 平均置信度` 打分，选最高分角度
+   - 评分：高置信度（≥0.7）检测框的 `置信度 × 文本长度` 累加
+   - 0° 有优先权：90° 需超出 0° 分数 20% 以上才会被选中
 3. 辅助函数：`_rotate_image(image, angle)`、`_resize_to_max(image, max_size)`
 
 ---
 
 ### 阶段 4：PaddleOCR 识别（ocr_engine.py 内 `WaybillOCR.recognize`）
 
-**状态：已实现，未验证**
+**状态：已完成，已验证 ✓**
 
-- **类**：`WaybillOCR(use_gpu, lang, use_angle_cls, det_db_thresh, thumbnail_size)`
+- **类**：`WaybillOCR(use_gpu, lang, use_angle_cls, det_db_thresh, det_db_box_thresh, det_db_unclip_ratio, thumbnail_size)`
 - **方法**：`recognize(image: np.ndarray) -> dict`
 - **返回**：
   - `full_text`：按行拼接的全文（`\n` 分隔）
@@ -161,7 +218,7 @@ waybill_ocr/                        ← 项目根目录
 
 ### 阶段 5：主流程（pipeline.py）
 
-**状态：已实现，未验证**
+**状态：已完成，已验证 ✓**
 
 - **类**：`WaybillPipeline(output_dir)`
 - **方法**：
@@ -171,8 +228,12 @@ waybill_ocr/                        ← 项目根目录
   - `index`、`class`、`confidence`、`bbox`
   - `text`（全文）、`lines`（行列表）、`orientation`（矫正角度）
   - 异常时包含 `error` 字段
-- **调试图保存**：`SAVE_DEBUG_IMAGES=True` 时写入 `output/debug_*_rectified.jpg`
-- **命令行入口**：`python -m waybill_ocr.pipeline images... [-o output] [--json]`
+- **输出文件**：每张图片一个子文件夹，包含：
+  - `yolo_annotated.jpg`：YOLO 标注图
+  - `{i}_rectified.jpg`：校正图
+  - `{i}_ocr.txt`：纯文本
+  - `{i}_result.json`：完整结构化结果
+- **命令行入口**：`python run_ocr.py [images...] [-o output] [--json]`
 
 ---
 
@@ -212,21 +273,33 @@ waybill_ocr/                        ← 项目根目录
 
 | 模块 | 文件 | 状态 | 测试 |
 |------|------|------|------|
-| YOLO 分割 | `segmentor.py` | 已实现 | 未验证 |
-| 透视校正 | `rectifier.py` | 已实现 | **已验证 ✓** |
-| 方向矫正 | `ocr_engine.py` | 已实现 | 未验证 |
-| OCR 识别 | `ocr_engine.py` | 已实现 | 未验证 |
-| 主流程 | `pipeline.py` | 已实现 | 未验证 |
-| OCR 占位 | `ocr_engine_stub.py` | 已实现 | — |
-| 配置管理 | `config.py` | 已实现 | — |
-| 入口脚本 | `run_ocr.py` | 已实现 | — |
+| YOLO 分割 | `segmentor.py` | 已完成 | **已验证 ✓** |
+| 透视校正 | `rectifier.py` | 已完成 | **已验证 ✓** |
+| bbox 扩展 | `rectifier.py` | 已完成 | **已验证 ✓** |
+| 方向矫正 | `ocr_engine.py` | 已完成 | **已验证 ✓** |
+| OCR 识别 | `ocr_engine.py` | 已完成 | **已验证 ✓** |
+| 主流程 | `pipeline.py` | 已完成 | **已验证 ✓** |
+| 结果输出 | `pipeline.py` | 已完成 | **已验证 ✓** |
+| OCR 占位 | `ocr_engine_stub.py` | 已完成 | — |
+| 配置管理 | `config.py` + YAML | 已完成 | **已验证 ✓** |
+| 入口脚本 | `run_ocr.py` | 已完成 | **已验证 ✓** |
 | 测试脚本 | `tests/test_rectifier.py` | 已完成 | ✓ |
 | 生产部署 | — | 未实现 | — |
+
+## 已解决的关键问题
+
+1. **ONNX 输入尺寸不匹配**：模型导出时用 960×960，需在 predict 时指定 `imgsz=960`
+2. **ONNX task 元数据丢失**：加载时需显式指定 `task="segment"`
+3. **小面积误检**：segmentor 中增加掩码面积过滤（< 0.5% 总像素则丢弃）
+4. **掩码不完整导致截断**：当掩码四角点覆盖范围不到 bbox 的 75% 时，用 bbox 扩展
+5. **方向矫正误判 180°**：PaddleOCR 的 angle_cls 已处理 0°/180°，外层只判断 90°
+6. **被遮挡文字未检测**：调低 `det_db_thresh` 和 `det_db_box_thresh`，增大 `det_db_unclip_ratio`
+7. **PaddleOCR 3.x 不兼容 Python 3.8**：降级到 paddleocr 2.7.3 + paddlepaddle 2.6.2
 
 ## 运行方式
 
 ```bash
-# 在 waybill_ocr/ 目录下执行
+# 安装依赖（Python 3.8 需用 paddleocr==2.7.3 paddlepaddle==2.6.2）
 pip install -r requirements.txt
 
 # 处理 data/input 下所有图片
@@ -235,19 +308,33 @@ python run_ocr.py
 # 指定图片
 python run_ocr.py 图片1.jpg 图片2.jpg
 
-# 保存 JSON
-python run_ocr.py data/input/*.jpg -o output --json
+# 保存汇总 JSON
+python run_ocr.py --json
+
+# 指定输出目录
+python run_ocr.py -o my_output --json
 
 # 运行透视校正测试
 python tests/test_rectifier.py
 ```
 
+## 依赖版本
+
+| 包 | 版本要求 | 说明 |
+|---|---|---|
+| opencv-python | >=4.5.0 | 图像处理 |
+| numpy | >=1.20.0 | 数组计算 |
+| ultralytics | >=8.0.0 | YOLOv8 推理 |
+| paddlepaddle | 2.6.2 | PaddleOCR 后端（Python 3.8 兼容） |
+| paddleocr | 2.7.3 | OCR 识别（Python 3.8 兼容） |
+| pyyaml | >=6.0 | YAML 配置加载 |
+
 ## 下一步待办
 
-1. **端到端验证**：用一张真实快递单图片跑通全流程（分割→校正→OCR）
-2. **安装 PaddleOCR**：`pip install paddlepaddle paddleocr`，验证阶段 3+4
-3. **生产部署**：FastAPI 封装、Docker 容器化
-4. **性能优化**：GPU 推理、TensorRT 导出
+1. **多图验证**：用更多真实快递单图片测试，收集边界场景
+2. **生产部署**：FastAPI 封装、Docker 容器化
+3. **性能优化**：GPU 推理、TensorRT 导出
+4. **Python 升级**：升级到 3.9+ 后可使用 paddleocr 3.x（模型更新、精度更高）
 
 ## 来源说明
 

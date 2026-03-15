@@ -213,17 +213,60 @@ def perspective_transform(image: np.ndarray, src_pts: np.ndarray,
     return warped
 
 
+def _expand_quad_with_bbox(quad: np.ndarray, bbox: np.ndarray,
+                           coverage_threshold: float = 0.75) -> np.ndarray:
+    """
+    当掩码四角点覆盖范围明显小于 bbox 时，用 bbox 扩展四角点。
+
+    判断逻辑：如果四角点在 x 或 y 方向的覆盖不到 bbox 的 coverage_threshold，
+    则改用 bbox 的四角（保留掩码四角点的透视倾斜信息来估算 bbox 角点）。
+
+    Args:
+        quad: 掩码提取的四角点 (4, 2)，已排序 [TL, TR, BR, BL]
+        bbox: YOLO 检测框 [x1, y1, x2, y2]
+        coverage_threshold: 覆盖率阈值，低于此值则用 bbox 替换
+
+    Returns:
+        扩展后的四角点 (4, 2)
+    """
+    bx1, by1, bx2, by2 = bbox[:4]
+    bbox_w = bx2 - bx1
+    bbox_h = by2 - by1
+
+    qx_min, qy_min = quad.min(axis=0)
+    qx_max, qy_max = quad.max(axis=0)
+    quad_w = qx_max - qx_min
+    quad_h = qy_max - qy_min
+
+    x_coverage = quad_w / max(bbox_w, 1)
+    y_coverage = quad_h / max(bbox_h, 1)
+
+    if x_coverage >= coverage_threshold and y_coverage >= coverage_threshold:
+        return quad
+
+    bbox_pts = np.array([
+        [bx1, by1],
+        [bx2, by1],
+        [bx2, by2],
+        [bx1, by2],
+    ], dtype=np.float32)
+    return order_points(bbox_pts)
+
+
 def rectify_from_mask(image: np.ndarray, mask: np.ndarray,
+                      bbox: np.ndarray = None,
                       epsilon_ratio: float = 0.02,
                       use_convex_hull: bool = True) -> dict:
     """
     完整的透视校正流程（一步调用）。
 
-    输入原图 + 掩码，输出校正后的矩形图像及中间结果。
+    输入原图 + 掩码 + 可选 bbox，输出校正后的矩形图像及中间结果。
+    当掩码四角点覆盖范围明显小于 bbox 时，自动用 bbox 扩展。
 
     Args:
         image: 原始图像 (H, W, 3)
         mask: 二值掩码 (H, W)，目标区域为 1 或 255
+        bbox: YOLO 检测框 [x1, y1, x2, y2]，用于辅助扩展不完整的掩码
         epsilon_ratio: 轮廓近似精度
         use_convex_hull: 是否使用凸包平滑
 
@@ -236,6 +279,10 @@ def rectify_from_mask(image: np.ndarray, mask: np.ndarray,
     """
     cleaned = clean_mask(mask)
     src_pts = find_quad_from_mask(mask, epsilon_ratio, use_convex_hull)
+
+    if bbox is not None:
+        src_pts = _expand_quad_with_bbox(src_pts, bbox)
+
     width, height = compute_target_size(src_pts)
     rectified = perspective_transform(image, src_pts, (width, height))
 

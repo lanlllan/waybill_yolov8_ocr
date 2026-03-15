@@ -54,6 +54,8 @@ class WaybillOCR:
         lang: str = "ch",
         use_angle_cls: bool = True,
         det_db_thresh: float = 0.3,
+        det_db_box_thresh: float = 0.5,
+        det_db_unclip_ratio: float = 1.8,
         thumbnail_size: int = 640,
     ):
         PaddleOCR = _import_paddle_ocr()
@@ -62,40 +64,50 @@ class WaybillOCR:
             lang=lang,
             use_gpu=use_gpu,
             det_db_thresh=det_db_thresh,
+            det_db_box_thresh=det_db_box_thresh,
+            det_db_unclip_ratio=det_db_unclip_ratio,
             show_log=False,
         )
         self.thumbnail_size = thumbnail_size
 
     def find_best_orientation(self, image: np.ndarray) -> int:
         """
-        对 0°/90°/180°/270° 择优，返回最佳角度。
-        竖向图只试 0° 和 180°，横向图试四方向。
+        判断是否需要旋转 90°/270°，返回最佳角度。
+
+        PaddleOCR 的 angle_cls 已能自动处理 0°/180° 翻转，
+        因此只在图片为横向时额外测试 90°/270°（竖版快递单横拍的情况）。
+
+        评分策略：
+        - 对比 0° 和 90° 的识别结果（高置信度框的 conf×len 总分）
+        - 90° 需超出 0° 至少 20% 才选 90°（0° 优先原则）
         """
         h, w = image.shape[:2]
-        if h > w:
-            candidates = [0, 180]
-        else:
-            candidates = [0, 90, 180, 270]
 
-        best_angle = 0
-        best_score = -1.0
+        # 竖向或接近正方形的图，0°/180° 交给 angle_cls 处理即可
+        if h >= w * 0.8:
+            return 0
 
-        for angle in candidates:
+        # 横向图：对比 0° 和 90°
+        conf_threshold = 0.7
+        scores = {}
+
+        for angle in [0, 90]:
             rotated = _rotate_image(image, angle)
             small = _resize_to_max(rotated, self.thumbnail_size)
             result = self.ocr.ocr(small, cls=True)
 
+            score = 0.0
             if result and result[0]:
-                confs = [line[1][1] for line in result[0]]
-                score = len(confs) * (sum(confs) / len(confs))
-            else:
-                score = 0.0
+                for line in result[0]:
+                    text = line[1][0]
+                    conf = float(line[1][1])
+                    if conf >= conf_threshold:
+                        score += conf * len(text)
+            scores[angle] = score
 
-            if score > best_score:
-                best_score = score
-                best_angle = angle
-
-        return best_angle
+        if scores[90] > scores[0] * 1.2:
+            return 90
+        return 0
 
     def recognize(self, image: np.ndarray) -> dict:
         """

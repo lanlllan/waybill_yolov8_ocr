@@ -224,6 +224,68 @@ def add_mask_noise(mask: np.ndarray, seed: int = 42) -> dict:
     return results
 
 
+def add_edge_irregular_noise(mask: np.ndarray, seed: int = 99) -> dict:
+    """
+    给干净掩码添加边缘整体不规则缺陷，模拟 YOLO 分割的典型输出。
+
+    与 add_mask_noise 中的局部缺陷不同，这些缺陷影响的是整条边缘。
+
+    Returns:
+        dict: {缺陷名称: 带缺陷的掩码}
+            - jagged:   锯齿边缘（模拟低分辨率掩码上采样）
+            - wavy:     波浪边缘（模拟分割边界不确定性）
+            - eroded:   整体侵蚀（掩码向内均匀收缩）
+            - blunted:  角点钝化（四角被磨圆成弧形）
+    """
+    rng = np.random.RandomState(seed)
+    h, w = mask.shape[:2]
+    results = {}
+
+    # 1. 锯齿边缘：缩小再放大模拟低分辨率上采样
+    scale = 8
+    small = cv2.resize(mask, (w // scale, h // scale),
+                       interpolation=cv2.INTER_NEAREST)
+    jagged = cv2.resize(small, (w, h), interpolation=cv2.INTER_NEAREST)
+    results["jagged"] = jagged
+
+    # 2. 波浪边缘：对轮廓点施加法向正弦扰动
+    wavy = np.zeros_like(mask)
+    contours, _ = cv2.findContours(mask.copy(), cv2.RETR_EXTERNAL,
+                                   cv2.CHAIN_APPROX_NONE)
+    if contours:
+        cnt = max(contours, key=cv2.contourArea).copy()
+        n_pts = len(cnt)
+        amplitude = 12
+        freq = 15
+        for i in range(n_pts):
+            offset = amplitude * np.sin(2 * np.pi * freq * i / n_pts)
+            prev_idx = (i - 1) % n_pts
+            next_idx = (i + 1) % n_pts
+            dx = float(cnt[next_idx][0][0] - cnt[prev_idx][0][0])
+            dy = float(cnt[next_idx][0][1] - cnt[prev_idx][0][1])
+            length = max(np.sqrt(dx * dx + dy * dy), 1e-6)
+            nx, ny = -dy / length, dx / length
+            cnt[i][0][0] = int(cnt[i][0][0] + nx * offset)
+            cnt[i][0][1] = int(cnt[i][0][1] + ny * offset)
+        cv2.drawContours(wavy, [cnt], -1, 255, -1)
+    results["wavy"] = wavy
+
+    # 3. 整体侵蚀：均匀内缩 15px
+    erode_px = 15
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE,
+                                       (erode_px * 2 + 1, erode_px * 2 + 1))
+    eroded = cv2.erode(mask, kernel, iterations=1)
+    results["eroded"] = eroded
+
+    # 4. 角点钝化：对掩码做大半径高斯模糊后重新二值化
+    blur_k = 51
+    blurred = cv2.GaussianBlur(mask, (blur_k, blur_k), 0)
+    _, blunted = cv2.threshold(blurred, 180, 255, cv2.THRESH_BINARY)
+    results["blunted"] = blunted
+
+    return results
+
+
 # ============================================================
 # 测试 1：合成透视变形校正（各角度）
 # ============================================================
@@ -323,6 +385,56 @@ def test_irregular_masks():
 
 
 # ============================================================
+# 测试 2b：边缘整体不规则掩码校正
+# ============================================================
+
+def test_edge_irregular_masks():
+    """测试边缘整体不规则掩码（锯齿/波浪/侵蚀/钝化）的校正鲁棒性。"""
+    ensure_output_dir()
+    print("\n" + "=" * 60)
+    print("测试 2b：边缘整体不规则掩码校正")
+    print("=" * 60)
+
+    waybill = create_synthetic_waybill(400, 600)
+    distorted, clean_mask_img, true_corners = apply_perspective_distortion(
+        waybill, angle_deg=20
+    )
+
+    noisy_masks = add_edge_irregular_noise(clean_mask_img)
+
+    for name, noisy_mask in noisy_masks.items():
+        print(f"\n--- 缺陷类型: {name} ---")
+
+        cv2.imwrite(os.path.join(OUTPUT_DIR, f"edge_{name}_01_noisy.jpg"), noisy_mask)
+
+        cleaned = clean_mask(noisy_mask)
+        cv2.imwrite(os.path.join(OUTPUT_DIR, f"edge_{name}_02_cleaned.jpg"), cleaned)
+
+        intersection = cv2.bitwise_and(clean_mask_img, cleaned)
+        union = cv2.bitwise_or(clean_mask_img, cleaned)
+        iou = cv2.countNonZero(intersection) / max(cv2.countNonZero(union), 1)
+        print(f"  掩码清理 IoU: {iou:.3f}")
+
+        try:
+            result = rectify_from_mask(distorted, noisy_mask)
+            rectified = result["rectified"]
+            src_pts = result["src_pts"]
+
+            vis = draw_quad_on_image(distorted, src_pts)
+            cv2.imwrite(os.path.join(OUTPUT_DIR, f"edge_{name}_03_quad.jpg"), vis)
+            cv2.imwrite(os.path.join(OUTPUT_DIR, f"edge_{name}_04_rect.jpg"), rectified)
+
+            true_ordered = order_points(true_corners)
+            errors = np.linalg.norm(src_pts - true_ordered, axis=1)
+            print(f"  校正后: {rectified.shape[1]}x{rectified.shape[0]}, "
+                  f"误差: avg={errors.mean():.1f}px, max={errors.max():.1f}px -> OK")
+        except ValueError as e:
+            print(f"  校正失败: {e}")
+
+    print(f"\n所有结果已保存到: {OUTPUT_DIR}")
+
+
+# ============================================================
 # 测试 3：真实图片（可选）
 # ============================================================
 
@@ -408,6 +520,7 @@ if __name__ == "__main__":
 
     test_synthetic()
     test_irregular_masks()
+    test_edge_irregular_masks()
 
     if args.image:
         test_with_real_image(args.image)
