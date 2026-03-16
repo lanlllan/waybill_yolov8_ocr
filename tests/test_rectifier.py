@@ -35,6 +35,11 @@ from waybill_ocr.rectifier import (
 
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "test_output")
 
+# 检查点阈值（像素）：超过则测试失败
+MAX_CORNER_ERROR_SYNTHETIC = 5   # 合成数据各角度，文档约 max < 4px
+AVG_CORNER_ERROR_SYNTHETIC = 3   # 合成数据平均误差，文档约 avg < 2px
+MAX_CORNER_ERROR_IRREGULAR = 30  # 不规则/边缘掩码，允许更大误差（eroded 约 25px）
+
 
 def ensure_output_dir():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -330,6 +335,12 @@ def test_synthetic():
         corner_errors = np.linalg.norm(detected_pts - true_ordered, axis=1)
         print(f"[6/6] 角点误差 - 平均: {corner_errors.mean():.1f}px, "
               f"最大: {corner_errors.max():.1f}px")
+        assert corner_errors.max() < MAX_CORNER_ERROR_SYNTHETIC, (
+            f"角点最大误差 {corner_errors.max():.1f}px 超过阈值 {MAX_CORNER_ERROR_SYNTHETIC}px (角度 {angle}°)"
+        )
+        assert corner_errors.mean() < AVG_CORNER_ERROR_SYNTHETIC, (
+            f"角点平均误差 {corner_errors.mean():.1f}px 超过阈值 {AVG_CORNER_ERROR_SYNTHETIC}px (角度 {angle}°)"
+        )
 
     print(f"\n所有结果已保存到: {OUTPUT_DIR}")
 
@@ -378,8 +389,12 @@ def test_irregular_masks():
             errors = np.linalg.norm(src_pts - true_ordered, axis=1)
             print(f"  校正后: {rectified.shape[1]}x{rectified.shape[0]}, "
                   f"误差: avg={errors.mean():.1f}px, max={errors.max():.1f}px -> OK")
+            assert errors.max() < MAX_CORNER_ERROR_IRREGULAR, (
+                f"[{name}] 角点最大误差 {errors.max():.1f}px 超过阈值 {MAX_CORNER_ERROR_IRREGULAR}px"
+            )
         except ValueError as e:
             print(f"  校正失败: {e}")
+            raise AssertionError(f"[{name}] 不规则掩码校正失败: {e}") from e
 
     print(f"\n所有结果已保存到: {OUTPUT_DIR}")
 
@@ -428,8 +443,12 @@ def test_edge_irregular_masks():
             errors = np.linalg.norm(src_pts - true_ordered, axis=1)
             print(f"  校正后: {rectified.shape[1]}x{rectified.shape[0]}, "
                   f"误差: avg={errors.mean():.1f}px, max={errors.max():.1f}px -> OK")
+            assert errors.max() < MAX_CORNER_ERROR_IRREGULAR, (
+                f"[{name}] 角点最大误差 {errors.max():.1f}px 超过阈值 {MAX_CORNER_ERROR_IRREGULAR}px"
+            )
         except ValueError as e:
             print(f"  校正失败: {e}")
+            raise AssertionError(f"[{name}] 边缘不规则掩码校正失败: {e}") from e
 
     print(f"\n所有结果已保存到: {OUTPUT_DIR}")
 
