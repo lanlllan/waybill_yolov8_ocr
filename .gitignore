@@ -33,7 +33,7 @@ Thumbs.db
 .DS_Store
 
 # docs
-docs/img/**
+# docs/img/**
 
 # tests
 tests/test_output/
