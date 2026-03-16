@@ -21,8 +21,12 @@ waybill_ocr/                    ← 项目根目录
 ├── models/yolo/                # YOLO 模型（best.onnx，.gitignore 忽略）
 ├── data/input/                 # 待处理图片（.gitignore 忽略内容）
 ├── output/                     # 识别结果（按图片名分子文件夹）
+├── models/paddleocr/           # PaddleOCR 模型缓存（首次运行自动下载）
 ├── tests/                      # 测试脚本
-├── docs/DESIGN.md              # 完整方案设计文档
+├── docs/
+│   ├── DESIGN.md               # 完整方案设计文档
+│   ├── TECHNIQUES.md           # 技术细节文档（论文参考）
+│   └── img/                    # 文档配图
 ├── requirements.txt            # Python 依赖
 └── run_ocr.py                  # 入口脚本
 ```
@@ -65,7 +69,9 @@ python run_ocr.py -o my_output --json
 output/
 ├── 206-0/                      # 以图片名命名的子文件夹
 │   ├── yolo_annotated.jpg      # YOLO 标注图（掩码+bbox+标签）
-│   ├── 0_rectified.jpg         # 透视校正后的快递单
+│   ├── 0_process.jpg           # 矫正过程可视化（各阶段中间结果拼接）
+│   ├── 0_rectified.jpg         # 方向矫正后的最终图片
+│   ├── 0_ocr_boxes.jpg         # OCR 检测框可视化（框+中文文字+置信度）
 │   ├── 0_ocr.txt               # OCR 提取的纯文本
 │   └── 0_result.json           # 完整结果（置信度、坐标、行信息）
 └── results.json                # 汇总（--json 开启）
@@ -91,7 +97,7 @@ ocr:
 | 用途 | 路径 | 说明 |
 |------|------|------|
 | YOLO 分割 | `models/yolo/best.onnx` | YOLOv8n-Seg，1 类 waybill，输入 960×960 |
-| PaddleOCR | `~/.paddleocr/` 或系统默认 | PP-OCRv4，首次运行自动下载 |
+| PaddleOCR | `models/paddleocr/` | PP-OCRv4，首次运行自动下载到项目内 |
 
 ## 运行测试
 
@@ -99,6 +105,7 @@ ocr:
 python tests/test_rectifier.py
 ```
 
-## 设计文档
+## 文档
 
-详见 [docs/DESIGN.md](docs/DESIGN.md)，包含各阶段详细说明、已解决问题、配置项一览。
+- [docs/DESIGN.md](docs/DESIGN.md) — 完整方案设计（各阶段说明、配置项、已解决问题）
+- [docs/TECHNIQUES.md](docs/TECHNIQUES.md) — 技术细节（透视校正 + 方向矫正算法原理，含配图，面向论文写作）

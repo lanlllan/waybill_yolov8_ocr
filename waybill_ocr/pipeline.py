@@ -6,6 +6,7 @@
     ├── 206-0/
     │   ├── 0_rectified.jpg      # 透视校正后的快递单图片
     │   ├── 0_process.jpg        # 矫正过程可视化（各阶段中间结果拼接）
+    │   ├── 0_ocr_boxes.jpg      # OCR 文本检测框可视化（框+文字+置信度）
     │   ├── 0_ocr.txt            # OCR 提取的纯文本
     │   ├── 0_result.json        # 完整结果（含置信度、坐标等）
     │   └── ...                  # 多个快递单时依次编号
@@ -112,14 +113,29 @@ class WaybillPipeline:
 
     @staticmethod
     def _add_label(img: np.ndarray, text: str) -> np.ndarray:
-        """在图片顶部添加中文/英文标签栏。"""
+        """在图片顶部添加自适应大小的标签栏。"""
         h, w = img.shape[:2]
-        bar_h = 40
-        bar = np.full((bar_h, w, 3), 40, dtype=np.uint8)
         font = cv2.FONT_HERSHEY_SIMPLEX
-        text_size = cv2.getTextSize(text, font, 0.7, 2)[0]
-        x = (w - text_size[0]) // 2
-        cv2.putText(bar, text, (x, 28), font, 0.7, (255, 255, 255), 2)
+        thickness = 2
+        max_scale = 0.8
+        min_scale = 0.3
+
+        # 从大到小尝试字号，找到能放进面板宽度的最大字号
+        scale = max_scale
+        while scale >= min_scale:
+            text_size = cv2.getTextSize(text, font, scale, thickness)[0]
+            if text_size[0] <= w - 10:
+                break
+            scale -= 0.05
+        else:
+            text_size = cv2.getTextSize(text, font, min_scale, thickness)[0]
+            scale = min_scale
+
+        bar_h = text_size[1] + 20
+        bar = np.full((bar_h, w, 3), 40, dtype=np.uint8)
+        x = max((w - text_size[0]) // 2, 4)
+        y = text_size[1] + 10
+        cv2.putText(bar, text, (x, y), font, scale, (255, 255, 255), thickness)
         return np.vstack([bar, img])
 
     def _build_process_image(self, image: np.ndarray, det: dict,
@@ -204,6 +220,67 @@ class WaybillPipeline:
 
         return np.hstack(aligned)
 
+    @staticmethod
+    def _get_cjk_font(size: int = 16):
+        """加载中文字体，用于 Pillow 绘制。"""
+        from PIL import ImageFont
+        candidates = [
+            "C:/Windows/Fonts/msyh.ttc",
+            "C:/Windows/Fonts/simhei.ttf",
+            "C:/Windows/Fonts/simsun.ttc",
+            "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        ]
+        for path in candidates:
+            try:
+                return ImageFont.truetype(path, size)
+            except (OSError, IOError):
+                continue
+        return ImageFont.load_default()
+
+    @staticmethod
+    def _draw_ocr_boxes(image: np.ndarray, lines: list) -> np.ndarray:
+        """在图像上绘制 OCR 检测框、识别文字和置信度（支持中文）。"""
+        from PIL import Image, ImageDraw
+
+        vis = image.copy()
+        # 先用 OpenCV 画多边形框
+        for line in lines:
+            box = line.get("box")
+            conf = line.get("confidence", 0)
+            if not box or len(box) < 4:
+                continue
+            pts = np.array(box, dtype=np.int32)
+            color = (0, 200, 0) if conf >= 0.9 else (0, 200, 255) if conf >= 0.7 else (0, 0, 255)
+            cv2.polylines(vis, [pts], isClosed=True, color=color, thickness=2)
+
+        # 转 PIL 绘制中文文字
+        pil_img = Image.fromarray(cv2.cvtColor(vis, cv2.COLOR_BGR2RGB))
+        draw = ImageDraw.Draw(pil_img)
+        h_img = vis.shape[0]
+        font_size = max(12, min(20, h_img // 50))
+        font = WaybillPipeline._get_cjk_font(font_size)
+
+        for line in lines:
+            box = line.get("box")
+            text = line.get("text", "")
+            conf = line.get("confidence", 0)
+            if not box or len(box) < 4:
+                continue
+
+            x = int(box[0][0])
+            y = int(box[0][1]) - font_size - 4
+            if y < 0:
+                y = int(box[2][1]) + 2
+            label = f"{text} ({conf:.2f})"
+            color_rgb = (0, 200, 0) if conf >= 0.9 else (0, 200, 255) if conf >= 0.7 else (255, 0, 0)
+
+            bbox_text = draw.textbbox((x, y), label, font=font)
+            draw.rectangle(bbox_text, fill=(0, 0, 0))
+            draw.text((x, y), label, fill=color_rgb, font=font)
+
+        return cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+
     def _save_result(self, sub_dir: str, index: int, result: dict,
                      rectified=None):
         """保存单个快递单的结果文件。"""
@@ -257,6 +334,7 @@ class WaybillPipeline:
 
             ocr_result = self.ocr.recognize(rectified)
             orientation = ocr_result.get("orientation", 0)
+            final_image = ocr_result.get("rotated_image", rectified)
 
             item = {
                 "index": i,
@@ -271,17 +349,25 @@ class WaybillPipeline:
 
             self._save_result(
                 sub_dir, i, item,
-                rectified=rectified if SAVE_DEBUG_IMAGES else None,
+                rectified=final_image if SAVE_DEBUG_IMAGES else None,
             )
 
             if SAVE_DEBUG_IMAGES:
                 try:
                     process_img = self._build_process_image(
-                        image, det, rect_result, rectified, orientation)
+                        image, det, rect_result, final_image, orientation)
                     process_path = os.path.join(sub_dir, f"{i}_process.jpg")
                     cv2.imwrite(process_path, process_img)
                 except Exception:
                     pass
+
+                if ocr_result.get("lines"):
+                    try:
+                        ocr_vis = self._draw_ocr_boxes(final_image, ocr_result["lines"])
+                        ocr_vis_path = os.path.join(sub_dir, f"{i}_ocr_boxes.jpg")
+                        cv2.imwrite(ocr_vis_path, ocr_vis)
+                    except Exception:
+                        pass
 
         return results
 

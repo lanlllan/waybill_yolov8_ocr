@@ -26,4 +26,5 @@ class WaybillOCRStub:
             "full_text": "",
             "lines": [],
             "orientation": 0,
+            "rotated_image": image,
         }

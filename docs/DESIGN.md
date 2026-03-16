@@ -38,7 +38,9 @@ waybill_ocr/                        ← 项目根目录
 │   ├── __init__.py
 │   └── test_output/                # 测试输出图片
 ├── docs/
-│   └── DESIGN.md                   # 本文档
+│   ├── DESIGN.md                   # 本文档（方案设计）
+│   ├── TECHNIQUES.md               # 技术细节文档（论文参考）
+│   └── img/                        # 文档配图
 ├── logs/                           # 运行日志（预留）
 ├── requirements.txt                # Python 依赖
 ├── run_ocr.py                      # 入口脚本
@@ -54,7 +56,9 @@ waybill_ocr/                        ← 项目根目录
 output/
 ├── 206-0/                          # 图片名（去扩展名）
 │   ├── yolo_annotated.jpg          # YOLO 标注图（掩码+bbox+标签+置信度）
-│   ├── 0_rectified.jpg             # 透视校正后的快递单图片
+│   ├── 0_process.jpg               # 矫正过程可视化（各阶段中间结果拼接）
+│   ├── 0_rectified.jpg             # 方向矫正后的最终图片
+│   ├── 0_ocr_boxes.jpg             # OCR 文本检测框可视化（框+中文文字+置信度）
 │   ├── 0_ocr.txt                   # OCR 提取的纯文本
 │   └── 0_result.json               # 完整结果（含置信度、坐标、行信息）
 └── results.json                    # 汇总 JSON（--json 参数开启）
@@ -83,18 +87,20 @@ output/
 | `yolo.iou_threshold` | `0.7` | NMS IoU 阈值 |
 | `yolo.device` | `"cpu"` | 推理设备，`"cpu"` 或 `"0"`(GPU) |
 | `yolo.imgsz` | `960` | ONNX 模型导出时的输入尺寸 |
+| `yolo.auto_install` | `false` | 禁止 Ultralytics 自动安装缺失包 |
 | **透视校正** | | |
 | `rectifier.epsilon_ratio` | `0.02` | 轮廓近似精度系数 |
 | `rectifier.use_convex_hull` | `true` | 是否使用凸包平滑 |
 | `rectifier.morph_size` | `7` | 形态学核大小 |
 | **PaddleOCR** | | |
-| `ocr.use_angle_cls` | `true` | 启用方向分类（处理 0°/180°） |
+| `ocr.use_angle_cls` | `true` | 启用方向分类（已弃用，实际以整图旋转对比为准） |
 | `ocr.lang` | `"ch"` | 中英文混合 |
 | `ocr.use_gpu` | `false` | OCR 使用 GPU |
 | `ocr.det_db_thresh` | `0.2` | 文本区域检测阈值（低值检测模糊/遮挡文字） |
 | `ocr.det_db_box_thresh` | `0.4` | 文本框置信度阈值（低值保留更多候选框） |
 | `ocr.det_db_unclip_ratio` | `1.8` | 文本框扩展系数（大值合并断裂文字） |
 | `ocr.orientation_thumbnail_size` | `640` | 方向矫正时缩略图最长边 |
+| `ocr.model_dir` | `"models/paddleocr"` | PaddleOCR 模型本地缓存路径 |
 | **输出** | | |
 | `output.dir` | `"output"` | 输出目录 |
 | `output.save_debug_images` | `true` | 保存中间步骤图片 |
@@ -130,6 +136,7 @@ ocr:
     - `class_id`：int 类别 ID
     - `class_name`：str 类别名
   - `annotated_image`：YOLO 绘制的标注图（含掩码+bbox+标签）
+- **掩码生成**：优先使用 `r.masks.xy`（多边形坐标，已映射到原图坐标系）通过 `cv2.fillPoly` 生成精确掩码；仅在 `masks.xy` 不可用时回退到 `r.masks.data` resize
 - **小面积过滤**：掩码面积小于图像总像素 0.5% 的检测结果自动丢弃，避免误检噪声
 
 ---
@@ -183,14 +190,16 @@ ocr:
 
 透视校正后图像是正面矩形，但文字可能朝 0°/90°/180°/270° 四个方向之一。
 
-#### 解决方案
+#### 解决方案：整图旋转对比
 
-1. **0°/180° 处理**：PaddleOCR 的 `use_angle_cls=True` 自动处理，外层不再重复判断
-2. **90° 处理**：仅在横向图（w > h/0.8）时对比 0° 和 90°
-   - 用缩略图（最长边 640px）做 OCR 加速
-   - 评分：高置信度（≥0.7）检测框的 `置信度 × 文本长度` 累加
-   - 0° 有优先权：90° 需超出 0° 分数 20% 以上才会被选中
-3. 辅助函数：`_rotate_image(image, angle)`、`_resize_to_max(image, max_size)`
+对所有方向统一采用**整图旋转 + OCR 评分对比**，不依赖 PaddleOCR 的 `angle_cls` 逐行分类器（`cls=False`），避免模糊文字被逐行误判。
+
+1. **0°/180° 对比**：始终执行，解决倒置拍摄问题
+2. **90°/270° 对比**：仅在横向图（`h < w × 0.8`）时额外执行，解决竖版快递单横拍问题
+3. **评分函数**：`score = Σ(conf_i × len(text_i))`（仅计 conf ≥ 0.7 的检测框）
+4. **0° 优先门槛**：其他方向得分需超出当前最佳的 **150%** 才会替换（高门槛防止噪声误判）
+5. **最终识别也用 `cls=False`**：方向已由整图对比确定，不需要 `angle_cls` 再逐行翻转
+6. 辅助函数：`_rotate_image(image, angle)`、`_resize_to_max(image, max_size)`、`_score_orientation(image)`
 
 ---
 
@@ -198,12 +207,13 @@ ocr:
 
 **状态：已完成，已验证 ✓**
 
-- **类**：`WaybillOCR(use_gpu, lang, use_angle_cls, det_db_thresh, det_db_box_thresh, det_db_unclip_ratio, thumbnail_size)`
+- **类**：`WaybillOCR(use_gpu, lang, use_angle_cls, det_db_thresh, det_db_box_thresh, det_db_unclip_ratio, thumbnail_size, model_dir)`
 - **方法**：`recognize(image: np.ndarray) -> dict`
 - **返回**：
   - `full_text`：按行拼接的全文（`\n` 分隔）
   - `lines`：列表，每项含 `text`、`confidence`、`box`（4 角点）、`center`
   - `orientation`：选中的矫正角度
+  - `rotated_image`：方向矫正后的图像（供 pipeline 用于保存和可视化）
 
 #### 结果排序
 
@@ -230,7 +240,9 @@ ocr:
   - 异常时包含 `error` 字段
 - **输出文件**：每张图片一个子文件夹，包含：
   - `yolo_annotated.jpg`：YOLO 标注图
-  - `{i}_rectified.jpg`：校正图
+  - `{i}_process.jpg`：矫正过程可视化（输入ROI → 掩码 → 四角检测 → 透视变换 → 最终图像）
+  - `{i}_rectified.jpg`：方向矫正后的最终图像
+  - `{i}_ocr_boxes.jpg`：OCR 检测框可视化（标注框 + 中文文字 + 置信度色彩编码）
   - `{i}_ocr.txt`：纯文本
   - `{i}_result.json`：完整结构化结果
 - **命令行入口**：`python run_ocr.py [images...] [-o output] [--json]`
@@ -292,9 +304,13 @@ ocr:
 2. **ONNX task 元数据丢失**：加载时需显式指定 `task="segment"`
 3. **小面积误检**：segmentor 中增加掩码面积过滤（< 0.5% 总像素则丢弃）
 4. **掩码不完整导致截断**：当掩码四角点覆盖范围不到 bbox 的 75% 时，用 bbox 扩展
-5. **方向矫正误判 180°**：PaddleOCR 的 angle_cls 已处理 0°/180°，外层只判断 90°
-6. **被遮挡文字未检测**：调低 `det_db_thresh` 和 `det_db_box_thresh`，增大 `det_db_unclip_ratio`
-7. **PaddleOCR 3.x 不兼容 Python 3.8**：降级到 paddleocr 2.7.3 + paddlepaddle 2.6.2
+5. **掩码宽高比失真**：原先直接 resize `r.masks.data`（低分辨率正方形）到原图非正方形尺寸导致形变，改用 `r.masks.xy` 多边形 + `cv2.fillPoly` 生成精确掩码
+6. **方向矫正误判**：弃用 PaddleOCR 逐行 `angle_cls`（对模糊文字不可靠），改为整图 0°/90°/180°/270° 四方向 OCR 评分对比，设 1.5× 门槛防止噪声误判
+7. **被遮挡文字未检测**：调低 `det_db_thresh` 和 `det_db_box_thresh`，增大 `det_db_unclip_ratio`
+8. **PaddleOCR 3.x 不兼容 Python 3.8**：降级到 paddleocr 2.7.3 + paddlepaddle 2.6.2
+9. **PaddleOCR 模型路径不可控**：通过 `ocr.model_dir` 配置项指定本地缓存路径
+10. **OCR 标注中文乱码**：用 Pillow + 系统字体 `msyh.ttc` 替代 `cv2.putText` 绘制中文
+11. **方向矫正后图像未正确输出**：`recognize()` 返回 `rotated_image`，pipeline 使用矫正后图像保存和可视化
 
 ## 运行方式
 
