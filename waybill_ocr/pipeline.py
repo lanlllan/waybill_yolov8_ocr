@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import argparse
 from datetime import datetime
@@ -46,6 +47,8 @@ from waybill_ocr.rectifier import (
     rectify_from_mask, draw_quad_on_image, draw_mask_overlay,
 )
 
+logger = logging.getLogger(__name__)
+
 
 def _get_ocr_engine():
     """延迟导入 PaddleOCR，未安装时返回占位实现。"""
@@ -61,7 +64,8 @@ def _get_ocr_engine():
             det_db_unclip_ratio=OCR_DET_DB_UNCLIP_RATIO,
             thumbnail_size=ORIENTATION_THUMBNAIL_SIZE,
         )
-    except Exception:
+    except ImportError:
+        logger.warning("PaddleOCR 未安装，使用空 Stub 引擎（OCR 结果将为空）")
         from waybill_ocr.ocr_engine_stub import WaybillOCRStub
         return WaybillOCRStub()
 
@@ -332,7 +336,24 @@ class WaybillPipeline:
                 self._save_result(sub_dir, i, item)
                 continue
 
-            ocr_result = self.ocr.recognize(rectified)
+            try:
+                ocr_result = self.ocr.recognize(rectified)
+            except Exception as e:
+                logger.warning("OCR 识别失败 (目标 #%d): %s", i, e)
+                item = {
+                    "index": i,
+                    "class": det.get("class_name", "waybill"),
+                    "confidence": float(det.get("confidence", 0)),
+                    "bbox": det["bbox"].tolist() if hasattr(det["bbox"], "tolist") else list(det["bbox"]),
+                    "error": f"OCR 识别失败: {e}",
+                    "text": "",
+                    "lines": [],
+                    "orientation": 0,
+                }
+                results.append(item)
+                self._save_result(sub_dir, i, item, rectified=rectified if SAVE_DEBUG_IMAGES else None)
+                continue
+
             orientation = ocr_result.get("orientation", 0)
             final_image = ocr_result.get("rotated_image", rectified)
 
@@ -359,7 +380,7 @@ class WaybillPipeline:
                     process_path = os.path.join(sub_dir, f"{i}_process.jpg")
                     cv2.imwrite(process_path, process_img)
                 except Exception:
-                    pass
+                    logger.warning("调试图生成失败 (目标 #%d)", i, exc_info=True)
 
                 if ocr_result.get("lines"):
                     try:
@@ -367,7 +388,7 @@ class WaybillPipeline:
                         ocr_vis_path = os.path.join(sub_dir, f"{i}_ocr_boxes.jpg")
                         cv2.imwrite(ocr_vis_path, ocr_vis)
                     except Exception:
-                        pass
+                        logger.warning("OCR 可视化图生成失败 (目标 #%d)", i, exc_info=True)
 
         return results
 
@@ -391,7 +412,8 @@ def main():
 
     for path, items in results.items():
         stem = os.path.splitext(os.path.basename(path))[0]
-        print(f"\n=== {path} → output/{stem}/ ===")
+        actual_dir = os.path.join(args.output, stem)
+        print(f"\n=== {path} → {actual_dir}/ ===")
         for item in items:
             if "error" in item:
                 print(f"  错误: {item['error']}")

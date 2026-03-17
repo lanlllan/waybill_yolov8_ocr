@@ -58,7 +58,8 @@ def main():
 
     for path, items in results.items():
         stem = os.path.splitext(os.path.basename(path))[0]
-        print(f"\n=== {path} → output/{stem}/ ===")
+        actual_dir = os.path.join(args.output, stem)
+        print(f"\n=== {path} → {actual_dir}/ ===")
         for item in items:
             if "error" in item:
                 print(f"  错误: {item['error']}")
