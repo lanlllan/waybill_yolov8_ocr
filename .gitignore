@@ -27,6 +27,8 @@ logs/
 # IDE
 .vscode/
 .idea/
+.cursor/
+.agent_team/
 
 # OS
 Thumbs.db

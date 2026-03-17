@@ -20,6 +20,8 @@
     - 不规则掩码（突起/缺口/碎片/孔洞/综合），角点误差 < 17px
 """
 
+from __future__ import annotations
+
 import cv2
 import numpy as np
 
@@ -129,12 +131,13 @@ def _quad_is_convex(pts: np.ndarray) -> bool:
 
 
 def find_quad_from_mask(mask: np.ndarray, epsilon_ratio: float = 0.02,
-                        use_convex_hull: bool = True) -> np.ndarray:
+                        use_convex_hull: bool = True,
+                        _cleaned: np.ndarray | None = None) -> np.ndarray:
     """
     从二值掩码中提取四边形角点。
 
     处理流程：
-    1. clean_mask 形态学去噪
+    1. clean_mask 形态学去噪（可通过 _cleaned 传入已清理掩码跳过）
     2. 提取最大轮廓
     3. 可选：凸包平滑（消除凹陷和突起）
     4. 策略 A：approxPolyDP 逐步增大 epsilon 近似为四边形
@@ -145,6 +148,7 @@ def find_quad_from_mask(mask: np.ndarray, epsilon_ratio: float = 0.02,
         mask: 二值掩码 (H, W)，值为 0/1 或 0/255
         epsilon_ratio: approxPolyDP 精度系数（基础值，会逐步放大）
         use_convex_hull: 是否对轮廓求凸包
+        _cleaned: 已清理的掩码（内部优化用，外部调用者无需传入）
 
     Returns:
         有序角点 (4, 2)，顺序 [TL, TR, BR, BL]
@@ -152,7 +156,7 @@ def find_quad_from_mask(mask: np.ndarray, epsilon_ratio: float = 0.02,
     Raises:
         ValueError: 掩码中没有有效轮廓
     """
-    cleaned = clean_mask(mask)
+    cleaned = _cleaned if _cleaned is not None else clean_mask(mask)
 
     contours, _ = cv2.findContours(cleaned, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if not contours:
@@ -278,7 +282,7 @@ def rectify_from_mask(image: np.ndarray, mask: np.ndarray,
             cleaned_mask  - 清理后的掩码
     """
     cleaned = clean_mask(mask)
-    src_pts = find_quad_from_mask(mask, epsilon_ratio, use_convex_hull)
+    src_pts = find_quad_from_mask(mask, epsilon_ratio, use_convex_hull, _cleaned=cleaned)
 
     if bbox is not None:
         src_pts = _expand_quad_with_bbox(src_pts, bbox)
