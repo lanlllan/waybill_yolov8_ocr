@@ -343,11 +343,11 @@ class WaybillPipeline:
                         # 自定义模式：使用配置文件中的参数
                         rectified = preprocess_for_ocr(
                             rectified,
-                            enhance_contrast=PREPROCESSING_ENHANCE_CONTRAST,
-                            denoise=PREPROCESSING_DENOISE,
-                            sharpen=PREPROCESSING_SHARPEN,
-                            adjust_brightness_flag=PREPROCESSING_ADJUST_BRIGHTNESS,
-                            binarize=PREPROCESSING_BINARIZE,
+                            enable_contrast=PREPROCESSING_ENHANCE_CONTRAST,
+                            enable_denoise=PREPROCESSING_DENOISE,
+                            enable_sharpen=PREPROCESSING_SHARPEN,
+                            enable_brightness=PREPROCESSING_ADJUST_BRIGHTNESS,
+                            enable_binarize=PREPROCESSING_BINARIZE,
                             contrast_clip_limit=PREPROCESSING_CONTRAST_CLIP_LIMIT,
                             denoise_strength=PREPROCESSING_DENOISE_STRENGTH,
                             sharpen_strength=PREPROCESSING_SHARPEN_STRENGTH,

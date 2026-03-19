@@ -156,11 +156,11 @@ def adjust_brightness(image: np.ndarray, target_brightness: int = 128) -> np.nda
 
 def preprocess_for_ocr(
     image: np.ndarray,
-    enhance_contrast: bool = True,
-    denoise: bool = True,
-    sharpen: bool = False,
-    adjust_brightness_flag: bool = False,
-    binarize: bool = False,
+    enable_contrast: bool = True,
+    enable_denoise: bool = True,
+    enable_sharpen: bool = False,
+    enable_brightness: bool = False,
+    enable_binarize: bool = False,
     contrast_clip_limit: float = 2.0,
     denoise_strength: int = 7,
     sharpen_strength: float = 0.5,
@@ -178,11 +178,11 @@ def preprocess_for_ocr(
 
     Args:
         image: 输入图像（BGR）
-        enhance_contrast: 是否增强对比度（推荐开启）
-        denoise: 是否去噪（推荐开启）
-        sharpen: 是否锐化（低质量图像可开启）
-        adjust_brightness_flag: 是否调整亮度（过暗/过亮图像可开启）
-        binarize: 是否二值化（根据场景决定，可能损失颜色信息）
+        enable_contrast: 是否增强对比度（推荐开启）
+        enable_denoise: 是否去噪（推荐开启）
+        enable_sharpen: 是否锐化（低质量图像可开启）
+        enable_brightness: 是否调整亮度（过暗/过亮图像可开启）
+        enable_binarize: 是否二值化（根据场景决定，可能损失颜色信息）
         contrast_clip_limit: CLAHE 对比度限制
         denoise_strength: 去噪强度
         sharpen_strength: 锐化强度
@@ -194,23 +194,23 @@ def preprocess_for_ocr(
     result = image.copy()
 
     # 1. 亮度调整（如果需要）
-    if adjust_brightness_flag:
+    if enable_brightness:
         result = adjust_brightness(result, target_brightness)
 
     # 2. 去噪（减少噪声干扰）
-    if denoise:
+    if enable_denoise:
         result = denoise_image(result, strength=denoise_strength)
 
     # 3. 对比度增强（提升文字可读性）
-    if enhance_contrast:
+    if enable_contrast:
         result = enhance_contrast(result, clip_limit=contrast_clip_limit)
 
     # 4. 锐化（增强边缘）
-    if sharpen:
+    if enable_sharpen:
         result = sharpen_image(result, strength=sharpen_strength)
 
     # 5. 二值化（可选，转为黑白图）
-    if binarize:
+    if enable_binarize:
         result = binarize_adaptive(result)
         # 如果二值化后是灰度图，转回 BGR 以保持一致性
         if len(result.shape) == 2:
@@ -242,20 +242,20 @@ def auto_preprocess(image: np.ndarray) -> np.ndarray:
 
     # 评估亮度
     mean_brightness = np.mean(gray)
-    adjust_brightness_flag = mean_brightness < 80 or mean_brightness > 180
+    need_brightness_adjustment = mean_brightness < 80 or mean_brightness > 180
 
     # 评估对比度（使用标准差作为对比度指标）
     contrast = np.std(gray)
-    enhance_contrast_flag = contrast < 40
+    need_contrast_enhancement = contrast < 40
 
     # 应用预处理
     return preprocess_for_ocr(
         image,
-        enhance_contrast=enhance_contrast_flag or True,  # 总是增强对比度
-        denoise=True,  # 总是轻度去噪
-        sharpen=False,  # 避免过度锐化
-        adjust_brightness_flag=adjust_brightness_flag,
-        binarize=False,  # 保留颜色信息
+        enable_contrast=need_contrast_enhancement or True,  # 总是增强对比度
+        enable_denoise=True,  # 总是轻度去噪
+        enable_sharpen=False,  # 避免过度锐化
+        enable_brightness=need_brightness_adjustment,
+        enable_binarize=False,  # 保留颜色信息
         denoise_strength=5,  # 轻度去噪
-        contrast_clip_limit=2.5 if enhance_contrast_flag else 2.0,
+        contrast_clip_limit=2.5 if need_contrast_enhancement else 2.0,
     )
