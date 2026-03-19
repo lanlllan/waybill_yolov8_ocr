@@ -19,6 +19,20 @@ rectifier:
   use_convex_hull: true
   morph_size: 7
 
+# ------ 图像预处理 ------
+preprocessing:
+  enabled: true                    # 是否启用预处理（推荐开启以提升 OCR 质量）
+  mode: "auto"                     # 预处理模式："auto"（自动）、"custom"（自定义）、"off"（关闭）
+  enhance_contrast: true           # 对比度增强（CLAHE）
+  denoise: true                    # 去噪处理
+  sharpen: false                   # 锐化处理（低质量图像可开启）
+  adjust_brightness: false         # 亮度调整（过暗/过亮图像可开启）
+  binarize: false                  # 二值化（可能损失颜色信息，谨慎使用）
+  contrast_clip_limit: 2.0         # CLAHE 对比度限制（1.0-4.0，推荐 2.0-2.5）
+  denoise_strength: 7              # 去噪强度（3-15，推荐 5-10）
+  sharpen_strength: 0.5            # 锐化强度（0.3-2.0，推荐 0.5-1.0）
+  target_brightness: 130           # 目标亮度（100-150，推荐 120-140）
+
 # ------ PaddleOCR ------
 ocr:
   model_dir: "models/paddleocr"  # 模型存放根目录（det/rec/cls 子目录自动创建）

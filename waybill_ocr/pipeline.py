@@ -40,12 +40,24 @@ from waybill_ocr.config import (
     OCR_DET_DB_BOX_THRESH,
     OCR_DET_DB_UNCLIP_RATIO,
     ORIENTATION_THUMBNAIL_SIZE,
+    PREPROCESSING_ENABLED,
+    PREPROCESSING_MODE,
+    PREPROCESSING_ENHANCE_CONTRAST,
+    PREPROCESSING_DENOISE,
+    PREPROCESSING_SHARPEN,
+    PREPROCESSING_ADJUST_BRIGHTNESS,
+    PREPROCESSING_BINARIZE,
+    PREPROCESSING_CONTRAST_CLIP_LIMIT,
+    PREPROCESSING_DENOISE_STRENGTH,
+    PREPROCESSING_SHARPEN_STRENGTH,
+    PREPROCESSING_TARGET_BRIGHTNESS,
 )
 import numpy as np
 from waybill_ocr.segmentor import WaybillSegmentor
 from waybill_ocr.rectifier import (
     rectify_from_mask, draw_quad_on_image, draw_mask_overlay,
 )
+from waybill_ocr.preprocessing import preprocess_for_ocr, auto_preprocess
 
 logger = logging.getLogger(__name__)
 
@@ -321,6 +333,26 @@ class WaybillPipeline:
             try:
                 rect_result = rectify_from_mask(image, det["mask"], bbox=det["bbox"])
                 rectified = rect_result["rectified"]
+
+                # 应用图像预处理以提升 OCR 质量
+                if PREPROCESSING_ENABLED and PREPROCESSING_MODE != "off":
+                    if PREPROCESSING_MODE == "auto":
+                        # 自动模式：根据图像质量自动选择预处理方法
+                        rectified = auto_preprocess(rectified)
+                    else:
+                        # 自定义模式：使用配置文件中的参数
+                        rectified = preprocess_for_ocr(
+                            rectified,
+                            enhance_contrast=PREPROCESSING_ENHANCE_CONTRAST,
+                            denoise=PREPROCESSING_DENOISE,
+                            sharpen=PREPROCESSING_SHARPEN,
+                            adjust_brightness_flag=PREPROCESSING_ADJUST_BRIGHTNESS,
+                            binarize=PREPROCESSING_BINARIZE,
+                            contrast_clip_limit=PREPROCESSING_CONTRAST_CLIP_LIMIT,
+                            denoise_strength=PREPROCESSING_DENOISE_STRENGTH,
+                            sharpen_strength=PREPROCESSING_SHARPEN_STRENGTH,
+                            target_brightness=PREPROCESSING_TARGET_BRIGHTNESS,
+                        )
             except Exception as e:
                 item = {
                     "index": i,

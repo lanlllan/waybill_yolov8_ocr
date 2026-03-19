@@ -77,6 +77,23 @@ RECTIFIER_USE_CONVEX_HULL = bool(_rect.get("use_convex_hull", True))
 RECTIFIER_MORPH_SIZE = int(_rect.get("morph_size", 7))
 
 # ============================================================
+# 图像预处理配置
+# ============================================================
+
+_prep = _cfg.get("preprocessing", {})
+PREPROCESSING_ENABLED = bool(_prep.get("enabled", True))
+PREPROCESSING_MODE = str(_prep.get("mode", "auto"))  # "auto", "custom", "off"
+PREPROCESSING_ENHANCE_CONTRAST = bool(_prep.get("enhance_contrast", True))
+PREPROCESSING_DENOISE = bool(_prep.get("denoise", True))
+PREPROCESSING_SHARPEN = bool(_prep.get("sharpen", False))
+PREPROCESSING_ADJUST_BRIGHTNESS = bool(_prep.get("adjust_brightness", False))
+PREPROCESSING_BINARIZE = bool(_prep.get("binarize", False))
+PREPROCESSING_CONTRAST_CLIP_LIMIT = float(_prep.get("contrast_clip_limit", 2.0))
+PREPROCESSING_DENOISE_STRENGTH = int(_prep.get("denoise_strength", 7))
+PREPROCESSING_SHARPEN_STRENGTH = float(_prep.get("sharpen_strength", 0.5))
+PREPROCESSING_TARGET_BRIGHTNESS = int(_prep.get("target_brightness", 130))
+
+# ============================================================
 # PaddleOCR 配置
 # ============================================================
 
