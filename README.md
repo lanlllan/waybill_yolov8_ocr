@@ -33,6 +33,12 @@ waybill_ocr/                    ← 项目根目录
 
 ## 快速开始
 
+### 0. 克隆仓库
+
+```bash
+git clone --depth=1 --single-branch --branch main https://github.com/lanlllan/waybill_yolov8_ocr.git
+```
+
 ### 1. 安装依赖
 
 ```bash
@@ -117,3 +123,7 @@ python tests/test_rectifier.py
 
 - [docs/DESIGN.md](docs/DESIGN.md) — 完整方案设计（各阶段说明、配置项、已解决问题）
 - [docs/TECHNIQUES.md](docs/TECHNIQUES.md) — 技术细节（透视校正 + 方向矫正算法原理，含配图，面向论文写作）
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/image?repos=lanlllan/waybill_yolov8_ocr&type=date&legend=top-left)](https://www.star-history.com/?repos=lanlllan%2Fwaybill_yolov8_ocr&type=date&logscale=&legend=top-left)
