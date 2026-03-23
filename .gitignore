@@ -7,8 +7,11 @@ data/**
 # Output
 output/
 
-# Models (large binary files)
-models/
+# Models：忽略权重与 OCR 缓存，保留目录占位（.gitkeep）与 yaml 说明文件
+models/paddleocr/**
+!models/paddleocr/.gitkeep
+models/yolo/**
+!models/yolo/.gitkeep
 
 
 # Python
