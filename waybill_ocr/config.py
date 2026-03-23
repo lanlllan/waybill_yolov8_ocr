@@ -6,9 +6,13 @@
     2. config/local.yaml     — 本地覆盖（不提交，.gitignore 已忽略）
 
 路径字段（如 model_path、dir）自动基于 PROJECT_ROOT 解析为绝对路径。
+若配置了 yolo.model_download_url 且模型文件不存在，会在导入本模块时下载到 model_path。
 """
 
+from __future__ import annotations
+
 import os
+import urllib.request
 from pathlib import Path
 
 import yaml
@@ -50,6 +54,42 @@ def _resolve_path(rel_path: str) -> str:
     return str(PROJECT_ROOT / rel_path)
 
 
+def _download_file(url: str, dest: Path, chunk_size: int = 1024 * 1024) -> None:
+    """将 url 下载到 dest（先写 .part 再替换，支持大文件）。"""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_suffix(dest.suffix + ".part")
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "waybill-yolov8-ocr/1.0"})
+        with urllib.request.urlopen(req, timeout=300) as resp:
+            with open(tmp, "wb") as f:
+                while True:
+                    chunk = resp.read(chunk_size)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+        tmp.replace(dest)
+    except Exception:
+        if tmp.exists():
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+        raise
+
+
+def _ensure_yolo_model(model_path: str, download_url: str | None) -> None:
+    """若模型文件不存在且配置了下载地址，则下载到 model_path。"""
+    path = Path(model_path)
+    if path.is_file():
+        return
+    url = (download_url or "").strip()
+    if not url:
+        return
+    print(f"未找到 YOLO 模型: {path}\n正在下载: {url}")
+    _download_file(url, path)
+    print(f"已保存: {path}")
+
+
 _cfg = _load_config()
 
 # ============================================================
@@ -58,10 +98,15 @@ _cfg = _load_config()
 
 _yolo = _cfg.get("yolo", {})
 YOLO_MODEL_PATH = _resolve_path(_yolo.get("model_path", "models/yolo/best.onnx"))
+YOLO_MODEL_DOWNLOAD_URL = _yolo.get("model_download_url") or None
+if isinstance(YOLO_MODEL_DOWNLOAD_URL, str):
+    YOLO_MODEL_DOWNLOAD_URL = YOLO_MODEL_DOWNLOAD_URL.strip() or None
+_ensure_yolo_model(YOLO_MODEL_PATH, YOLO_MODEL_DOWNLOAD_URL)
 YOLO_CONF_THRESHOLD = float(_yolo.get("conf_threshold", 0.5))
 YOLO_IOU_THRESHOLD = float(_yolo.get("iou_threshold", 0.7))
 YOLO_DEVICE = str(_yolo.get("device", "cpu"))
 YOLO_IMGSZ = int(_yolo.get("imgsz", 960))
+YOLO_WARMUP = bool(_yolo.get("warmup", True))
 YOLO_AUTO_INSTALL = bool(_yolo.get("auto_install", False))
 
 if not YOLO_AUTO_INSTALL:
@@ -97,3 +142,11 @@ ORIENTATION_THUMBNAIL_SIZE = int(_ocr.get("orientation_thumbnail_size", 640))
 _out = _cfg.get("output", {})
 OUTPUT_DIR = _resolve_path(_out.get("dir", "output"))
 SAVE_DEBUG_IMAGES = bool(_out.get("save_debug_images", True))
+SAVE_RESULTS_JSON = bool(_out.get("save_results_json", True))
+
+# ============================================================
+# 耗时统计
+# ============================================================
+
+_timing = _cfg.get("timing", {})
+TIMING_ENABLED = bool(_timing.get("enabled", False))

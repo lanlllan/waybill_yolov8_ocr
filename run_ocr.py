@@ -7,10 +7,10 @@
 输出结构：
     output/
     ├── <图片名>/
-    │   ├── 0_rectified.jpg    # 校正图
-    │   ├── 0_ocr.txt          # OCR 文本
-    │   └── 0_result.json      # 完整结果
-    └── results.json           # 汇总（--json 开启）
+    │   ├── *.jpg              # 调试图，仅当 output.save_debug_images
+    │   ├── 0_ocr.txt          # 始终
+    │   └── 0_result.json      # 始终
+    └── results.json           # 默认写入（output.save_results_json；可用 --no-results-json）
 """
 
 from __future__ import annotations
@@ -25,6 +25,7 @@ PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
+from waybill_ocr.config import SAVE_RESULTS_JSON
 from waybill_ocr.pipeline import WaybillPipeline, _make_serializable
 
 
@@ -40,7 +41,16 @@ def main():
         default=os.path.join(PROJECT_ROOT, "output"),
         help="输出目录，默认 output/",
     )
-    parser.add_argument("--json", "-j", action="store_true", help="保存汇总 results.json")
+    parser.add_argument(
+        "--json", "-j",
+        action="store_true",
+        help="保存汇总 results.json（默认已开启时可省略；与配置 save_results_json 任一为真即写入）",
+    )
+    parser.add_argument(
+        "--no-results-json",
+        action="store_true",
+        help="本次运行不写入汇总 results.json（覆盖配置）",
+    )
     args = parser.parse_args()
 
     if not args.images:
@@ -69,7 +79,8 @@ def main():
                   f"方向: {item['orientation']}°)")
             print(f"  {item['text']}")
 
-    if args.json:
+    save_summary = (SAVE_RESULTS_JSON or args.json) and not args.no_results_json
+    if save_summary:
         json_path = os.path.join(args.output, "results.json")
         with open(json_path, "w", encoding="utf-8") as f:
             json.dump(_make_serializable(results), f,

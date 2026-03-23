@@ -2,7 +2,7 @@
 
 基于 YOLOv8-Seg 实例分割 + PaddleOCR 的快递单信息自动提取流水线。
 
-**流程**：原始图片 → YOLO 分割定位 → 透视校正 → 方向矫正 → PaddleOCR 识别 → 结构化输出
+**流程**：原始图片 → YOLO 分割定位 → 透视校正  → 方向矫正 → PaddleOCR 识别 → 结构化输出
 
 ## 目录结构
 
@@ -43,7 +43,7 @@ pip install -r requirements.txt
 
 ### 2. 准备模型
 
-将 YOLOv8n-Seg 的 ONNX 模型放入 `models/yolo/best.onnx`。PaddleOCR 模型首次运行时自动下载。
+将 YOLOv8n-Seg 的 ONNX 模型放入 `models/yolo/best.onnx`）。若该文件不存在，程序会按 `config/default.yaml` 里的 `yolo.model_download_url` 自动下载到 `model_path` 所指路径。PaddleOCR 模型首次运行时下载到 `models/paddleocr/`（见 `ocr.model_dir`）。
 
 ### 3. 运行
 
@@ -54,27 +54,29 @@ python run_ocr.py
 # 指定图片
 python run_ocr.py 图片1.jpg 图片2.jpg
 
-# 保存汇总 JSON
-python run_ocr.py --json
+# 汇总 results.json：默认会写入（由 output.save_results_json 控制）；--json 可显式强制写入
+# 本次不写入汇总：python run_ocr.py --no-results-json
 
 # 指定输出目录
-python run_ocr.py -o my_output --json
+python run_ocr.py -o my_output
 ```
 
 未安装 PaddleOCR 时仍可跑通「分割 + 透视校正」，OCR 结果为空。
 
 ### 4. 输出结构
 
+每张图子目录下 **始终** 写入 `{i}_ocr.txt`、`{i}_result.json`。`yolo_annotated.jpg`、`{i}_rectified.jpg`、`{i}_process.jpg`、`{i}_ocr_boxes.jpg` 仅在 `output.save_debug_images: true` 时生成（默认见 `config/default.yaml`）。
+
 ```
 output/
 ├── 206-0/                      # 以图片名命名的子文件夹
-│   ├── yolo_annotated.jpg      # YOLO 标注图（掩码+bbox+标签）
-│   ├── 0_process.jpg           # 矫正过程可视化（各阶段中间结果拼接）
-│   ├── 0_rectified.jpg         # 方向矫正后的最终图片
-│   ├── 0_ocr_boxes.jpg         # OCR 检测框可视化（框+中文文字+置信度）
-│   ├── 0_ocr.txt               # OCR 提取的纯文本
-│   └── 0_result.json           # 完整结果（置信度、坐标、行信息）
-└── results.json                # 汇总（--json 开启）
+│   ├── yolo_annotated.jpg      # 调试图：YOLO 标注（save_debug_images）
+│   ├── 0_process.jpg           # 调试图：矫正过程拼接
+│   ├── 0_rectified.jpg         # 调试图：方向矫正后图像
+│   ├── 0_ocr_boxes.jpg         # 调试图：OCR 框 + 文字
+│   ├── 0_ocr.txt               # OCR 纯文本
+│   └── 0_result.json           # 完整结果（含 timing 等，见 timing.enabled）
+└── results.json                # 批量汇总（默认写入；可用 save_results_json / --no-results-json）
 ```
 
 ## 配置
@@ -85,9 +87,15 @@ output/
 yolo:
   device: "0"          # 切换到 GPU
   imgsz: 960           # ONNX 输入尺寸
+  warmup: true         # 启动时空图预热，避免首张图承担 ONNX 冷启动
 ocr:
   use_gpu: true
   det_db_thresh: 0.15  # 降低可检测更多模糊文字
+output:
+  save_debug_images: true   # 是否保存标注图、rectified、process、ocr_boxes
+  save_results_json: true   # 是否在 output 根目录写 results.json
+timing:
+  enabled: false           # 控制台与 JSON 中的分阶段耗时
 ```
 
 `local.yaml` 只需写要覆盖的字段，其余沿用默认值。
