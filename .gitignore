@@ -8,8 +8,8 @@ data/**
 output/
 
 # Models (large binary files)
-models/yolo/*.onnx
-models/paddleocr/
+models/
+
 
 # Python
 __pycache__/
@@ -28,7 +28,6 @@ logs/
 .vscode/
 .idea/
 .cursor/
-.agent_team/
 
 # OS
 Thumbs.db

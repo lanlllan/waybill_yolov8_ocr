@@ -7,11 +7,14 @@
 # ------ YOLO 分割模型 ------
 yolo:
   model_path: "models/yolo/best.onnx"
+  # 当 model_path 指向的文件不存在时，从此 URL 自动下载（保存到 model_path）
+  model_download_url: "https://github.com/lanlllan/waybill_yolov8_ocr/releases/download/v1.0.1/best.onnx"
   conf_threshold: 0.5
   iou_threshold: 0.7
   device: "cpu"          # "cpu" 或 "0"(GPU)
   imgsz: 960             # ONNX 导出时的输入尺寸
   auto_install: false    # 禁止 ultralytics 自动安装缺失依赖（如 onnxruntime-gpu）
+  warmup: true           # 流水线启动后对空图跑一次推理，预热模型，防止首次推理时耗时过长
 
 # ------ 透视校正 ------
 rectifier:
@@ -33,4 +36,10 @@ ocr:
 # ------ 输出 ------
 output:
   dir: "output"
-  save_debug_images: true
+  save_debug_images: false
+  save_results_json: true   # 批量处理结束后写入 output/results.json（汇总）；可用 --no-results-json 临时关闭
+
+# ------ 耗时统计（毫秒）------
+# 开启后：控制台打印各阶段耗时（整张 = 分解合计 + 其它微隙）；timing 写入 JSON（index=0 含读图/目录/标注图保存）
+timing:
+  enabled: true

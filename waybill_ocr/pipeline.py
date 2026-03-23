@@ -4,24 +4,24 @@
 输出目录结构（每张图一个子文件夹）：
     output/
     ├── 206-0/
-    │   ├── 0_rectified.jpg      # 透视校正后的快递单图片
-    │   ├── 0_process.jpg        # 矫正过程可视化（各阶段中间结果拼接）
-    │   ├── 0_ocr_boxes.jpg      # OCR 文本检测框可视化（框+文字+置信度）
-    │   ├── 0_ocr.txt            # OCR 提取的纯文本
-    │   ├── 0_result.json        # 完整结果（含置信度、坐标等）
+    │   ├── 0_rectified.jpg      # 调试图（save_debug_images）
+    │   ├── 0_process.jpg        # 调试图（矫正过程拼接）
+    │   ├── 0_ocr_boxes.jpg      # 调试图（OCR 框+文字）
+    │   ├── 0_ocr.txt            # 始终：OCR 纯文本
+    │   ├── 0_result.json        # 始终：完整结果 JSON
     │   └── ...                  # 多个快递单时依次编号
     ├── 207-0/
     │   └── ...
-    └── results.json             # 汇总 JSON（可选，--json 开启）
+    └── results.json             # 汇总（默认写入，见 output.save_results_json）
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import logging
 import os
-import argparse
-from datetime import datetime
+import time
 
 import cv2
 from waybill_ocr.config import (
@@ -30,8 +30,10 @@ from waybill_ocr.config import (
     YOLO_CONF_THRESHOLD,
     YOLO_IOU_THRESHOLD,
     YOLO_IMGSZ,
+    YOLO_WARMUP,
     SAVE_DEBUG_IMAGES,
     OUTPUT_DIR,
+    SAVE_RESULTS_JSON,
     OCR_MODEL_DIR,
     OCR_USE_GPU,
     OCR_LANG,
@@ -40,6 +42,7 @@ from waybill_ocr.config import (
     OCR_DET_DB_BOX_THRESH,
     OCR_DET_DB_UNCLIP_RATIO,
     ORIENTATION_THUMBNAIL_SIZE,
+    TIMING_ENABLED,
 )
 import numpy as np
 from waybill_ocr.segmentor import WaybillSegmentor
@@ -70,6 +73,10 @@ def _get_ocr_engine():
         return WaybillOCRStub()
 
 
+def _elapsed_ms(t0: float, t1: float) -> float:
+    return round((t1 - t0) * 1000.0, 2)
+
+
 def _make_serializable(obj):
     """递归将 numpy 等不可序列化的对象转为 Python 原生类型。"""
     import numpy as np
@@ -96,6 +103,11 @@ class WaybillPipeline:
             iou=YOLO_IOU_THRESHOLD,
             imgsz=YOLO_IMGSZ,
         )
+        if YOLO_WARMUP:
+            t0 = time.perf_counter()
+            self.segmentor.warmup()
+            if TIMING_ENABLED:
+                print(f"[计时] YOLO 预热 {_elapsed_ms(t0, time.perf_counter())}ms")
         self.ocr = _get_ocr_engine()
         os.makedirs(self.output_dir, exist_ok=True)
 
@@ -305,23 +317,57 @@ class WaybillPipeline:
 
     def process_image(self, image_path: str) -> list[dict]:
         """处理单张图片，返回所有检测到的快递单的 OCR 结果。"""
+        t_image0 = time.perf_counter()
         image = cv2.imread(image_path)
+        read_ms = _elapsed_ms(t_image0, time.perf_counter())
         if image is None:
-            return [{"error": f"无法读取图片: {image_path}"}]
+            err = [{"error": f"无法读取图片: {image_path}"}]
+            if TIMING_ENABLED:
+                err[0]["timing"] = {
+                    "read_image_ms": read_ms,
+                }
+            return err
 
+        t_prep0 = time.perf_counter()
         sub_dir = self._get_image_output_dir(image_path)
+        prepare_ms = _elapsed_ms(t_prep0, time.perf_counter())
+        t_seg0 = time.perf_counter()
         detections, annotated = self.segmentor.segment(image)
+        segment_ms = _elapsed_ms(t_seg0, time.perf_counter())
         results = []
 
+        yolo_save_ms = 0.0
         if annotated is not None and SAVE_DEBUG_IMAGES:
+            t_y0 = time.perf_counter()
             yolo_path = os.path.join(sub_dir, "yolo_annotated.jpg")
             cv2.imwrite(yolo_path, annotated)
+            yolo_save_ms = _elapsed_ms(t_y0, time.perf_counter())
+
+        per_item_parts: list[str] = []
+
+        def _row_timing(
+            index: int, rectify_ms: float, ocr_ms: float, save_ms: float
+        ) -> dict:
+            row = {
+                "segment_ms": segment_ms,
+                "rectify_ms": rectify_ms,
+                "ocr_ms": ocr_ms,
+                "save_and_debug_ms": save_ms,
+            }
+            if index == 0:
+                row["read_image_ms"] = read_ms
+                row["prepare_output_dir_ms"] = prepare_ms
+                row["yolo_annotated_save_ms"] = yolo_save_ms
+            return row
 
         for i, det in enumerate(detections):
+            ocr_ms = 0.0
+            t_rect0 = time.perf_counter()
             try:
                 rect_result = rectify_from_mask(image, det["mask"], bbox=det["bbox"])
                 rectified = rect_result["rectified"]
             except Exception as e:
+                rectify_ms = _elapsed_ms(t_rect0, time.perf_counter())
                 item = {
                     "index": i,
                     "class": det.get("class_name", "waybill"),
@@ -333,12 +379,23 @@ class WaybillPipeline:
                     "orientation": 0,
                 }
                 results.append(item)
+                t_save0 = time.perf_counter()
                 self._save_result(sub_dir, i, item)
+                save_ms = _elapsed_ms(t_save0, time.perf_counter())
+                if TIMING_ENABLED:
+                    item["timing"] = _row_timing(i, rectify_ms, 0.0, save_ms)
+                    per_item_parts.append(
+                        f"#{i} 校正失败 {rectify_ms}ms 写盘 {save_ms}ms"
+                    )
                 continue
+
+            rectify_ms = _elapsed_ms(t_rect0, time.perf_counter())
+            t_ocr0 = time.perf_counter()
 
             try:
                 ocr_result = self.ocr.recognize(rectified)
             except Exception as e:
+                ocr_ms = _elapsed_ms(t_ocr0, time.perf_counter())
                 logger.warning("OCR 识别失败 (目标 #%d): %s", i, e)
                 item = {
                     "index": i,
@@ -351,9 +408,17 @@ class WaybillPipeline:
                     "orientation": 0,
                 }
                 results.append(item)
+                t_save0 = time.perf_counter()
                 self._save_result(sub_dir, i, item, rectified=rectified if SAVE_DEBUG_IMAGES else None)
+                save_ms = _elapsed_ms(t_save0, time.perf_counter())
+                if TIMING_ENABLED:
+                    item["timing"] = _row_timing(i, rectify_ms, ocr_ms, save_ms)
+                    per_item_parts.append(
+                        f"#{i} 校正 {rectify_ms}ms OCR失败 {ocr_ms}ms 写盘 {save_ms}ms"
+                    )
                 continue
 
+            ocr_ms = _elapsed_ms(t_ocr0, time.perf_counter())
             orientation = ocr_result.get("orientation", 0)
             final_image = ocr_result.get("rotated_image", rectified)
 
@@ -368,6 +433,7 @@ class WaybillPipeline:
             }
             results.append(item)
 
+            t_save0 = time.perf_counter()
             self._save_result(
                 sub_dir, i, item,
                 rectified=final_image if SAVE_DEBUG_IMAGES else None,
@@ -390,6 +456,43 @@ class WaybillPipeline:
                     except Exception:
                         logger.warning("OCR 可视化图生成失败 (目标 #%d)", i, exc_info=True)
 
+            save_ms = _elapsed_ms(t_save0, time.perf_counter())
+            if TIMING_ENABLED:
+                item["timing"] = _row_timing(i, rectify_ms, ocr_ms, save_ms)
+
+            if TIMING_ENABLED:
+                per_item_parts.append(
+                    f"#{i} 校正 {rectify_ms}ms OCR {ocr_ms}ms 写盘/调试图 {save_ms}ms"
+                )
+
+        if TIMING_ENABLED:
+            total_ms = _elapsed_ms(t_image0, time.perf_counter())
+            stem = os.path.basename(image_path)
+            head = f"读图 {read_ms}ms | 准备目录 {prepare_ms}ms | 分割 {segment_ms}ms"
+            if yolo_save_ms > 0:
+                head += f" | 写标注图 {yolo_save_ms}ms"
+            if per_item_parts:
+                detail = " | ".join(per_item_parts)
+                core_sum = read_ms + prepare_ms + segment_ms + yolo_save_ms
+                for it in results:
+                    t = it.get("timing") or {}
+                    core_sum += float(t.get("rectify_ms", 0))
+                    core_sum += float(t.get("ocr_ms", 0))
+                    core_sum += float(t.get("save_and_debug_ms", 0))
+                core_sum = round(core_sum, 2)
+                gap = round(total_ms - core_sum, 2)
+                print(
+                    f"[计时] {stem}: {head} | {detail} | "
+                    f"分解合计 {core_sum}ms | 其它 {gap}ms | 整张 {total_ms}ms"
+                )
+            else:
+                core_sum = round(read_ms + prepare_ms + segment_ms + yolo_save_ms, 2)
+                gap = round(total_ms - core_sum, 2)
+                print(
+                    f"[计时] {stem}: {head} | 无检测目标 | "
+                    f"分解合计 {core_sum}ms | 其它 {gap}ms | 整张 {total_ms}ms"
+                )
+
         return results
 
     def process_batch(self, image_paths: list[str]) -> dict[str, list[dict]]:
@@ -404,7 +507,16 @@ def main():
     parser = argparse.ArgumentParser(description="快递单 OCR 提取")
     parser.add_argument("images", nargs="+", help="图片路径")
     parser.add_argument("--output", "-o", default=OUTPUT_DIR, help="输出目录")
-    parser.add_argument("--json", "-j", action="store_true", help="保存汇总 results.json")
+    parser.add_argument(
+        "--json", "-j",
+        action="store_true",
+        help="保存汇总 results.json（与配置 save_results_json 任一为真即写入）",
+    )
+    parser.add_argument(
+        "--no-results-json",
+        action="store_true",
+        help="本次运行不写入汇总 results.json",
+    )
     args = parser.parse_args()
 
     pipeline = WaybillPipeline(output_dir=args.output)
@@ -423,7 +535,8 @@ def main():
                   f"方向: {item['orientation']}°)")
             print(f"  {item['text']}")
 
-    if args.json:
+    save_summary = (SAVE_RESULTS_JSON or args.json) and not args.no_results_json
+    if save_summary:
         json_path = os.path.join(args.output, "results.json")
         with open(json_path, "w", encoding="utf-8") as f:
             json.dump(_make_serializable(results), f,

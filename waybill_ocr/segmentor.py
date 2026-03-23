@@ -2,7 +2,7 @@
 YOLO 分割模块。
 
 职责：加载 YOLOv8-Seg 模型（支持 .pt / .onnx），输入图片，输出每个检测目标的掩码。
-模型路径由 config 决定：优先 waybill_ocr/models/yolo/best.onnx，否则 export/export5/best.onnx。
+模型路径由 config 决定；若文件不存在且配置了 model_download_url，导入 config 时会自动下载。
 """
 
 from __future__ import annotations
@@ -28,6 +28,19 @@ class WaybillSegmentor:
         self.conf = conf
         self.iou = iou
         self.imgsz = imgsz
+
+    def warmup(self) -> None:
+        """对空白图跑一次与业务相同的 predict，摊薄 ONNX 首次推理冷启动。"""
+        h = w = int(self.imgsz)
+        dummy = np.zeros((h, w, 3), dtype=np.uint8)
+        self.model.predict(
+            dummy,
+            device=self.device,
+            conf=self.conf,
+            iou=self.iou,
+            imgsz=self.imgsz,
+            verbose=False,
+        )
 
     def segment(self, image: np.ndarray) -> tuple[list[dict], np.ndarray | None]:
         """

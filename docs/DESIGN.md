@@ -5,8 +5,7 @@
 ```
 原始图片 → [阶段1] YOLO分割 → [阶段2] 透视校正 → [阶段3] 方向矫正 → [阶段4] PaddleOCR → 文字输出
                   ↓                    ↓                                        ↓
-           yolo_annotated.jpg    0_rectified.jpg                          0_ocr.txt
-                                                                        0_result.json
+     yolo_annotated.jpg（调试图）  rectified 等（调试图）                    0_ocr.txt / 0_result.json（始终）
 ```
 
 ## 项目目录结构
@@ -59,12 +58,12 @@ output/
 │   ├── 0_process.jpg               # 矫正过程可视化（各阶段中间结果拼接）
 │   ├── 0_rectified.jpg             # 方向矫正后的最终图片
 │   ├── 0_ocr_boxes.jpg             # OCR 文本检测框可视化（框+中文文字+置信度）
-│   ├── 0_ocr.txt                   # OCR 提取的纯文本
-│   └── 0_result.json               # 完整结果（含置信度、坐标、行信息）
-└── results.json                    # 汇总 JSON（--json 参数开启）
+│   ├── 0_ocr.txt                   # OCR 提取的纯文本（始终写入）
+│   └── 0_result.json               # 完整结果（含置信度、坐标、行信息；timing 见配置）
+└── results.json                    # 批量汇总（默认写入 output.save_results_json；CLI 可用 --no-results-json）
 ```
 
-多个快递单时按编号 `0_`、`1_`、`2_` 依次生成。
+`yolo_annotated.jpg`、`{i}_rectified.jpg`、`{i}_process.jpg`、`{i}_ocr_boxes.jpg` 仅当 `output.save_debug_images: true` 时生成。多个快递单时按编号 `0_`、`1_`、`2_` 依次生成。
 
 ## 配置说明
 
@@ -83,11 +82,13 @@ output/
 |--------|--------|------|
 | **YOLO 分割** | | |
 | `yolo.model_path` | `models/yolo/best.onnx` | YOLO 分割模型路径 |
+| `yolo.model_download_url` | （见 default.yaml） | 模型文件不存在时从此 URL 下载到 `model_path` |
 | `yolo.conf_threshold` | `0.5` | 检测置信度阈值 |
 | `yolo.iou_threshold` | `0.7` | NMS IoU 阈值 |
 | `yolo.device` | `"cpu"` | 推理设备，`"cpu"` 或 `"0"`(GPU) |
 | `yolo.imgsz` | `960` | ONNX 模型导出时的输入尺寸 |
 | `yolo.auto_install` | `false` | 禁止 Ultralytics 自动安装缺失包 |
+| `yolo.warmup` | `true` | 流水线启动时空图跑一次推理，摊薄 ONNX 冷启动 |
 | **透视校正** | | |
 | `rectifier.epsilon_ratio` | `0.02` | 轮廓近似精度系数 |
 | `rectifier.use_convex_hull` | `true` | 是否使用凸包平滑 |
@@ -103,7 +104,10 @@ output/
 | `ocr.model_dir` | `"models/paddleocr"` | PaddleOCR 模型本地缓存路径 |
 | **输出** | | |
 | `output.dir` | `"output"` | 输出目录 |
-| `output.save_debug_images` | `true` | 保存中间步骤图片 |
+| `output.save_debug_images` | `false` | 是否保存 YOLO 标注图、rectified、process、ocr_boxes 等调试图 |
+| `output.save_results_json` | `true` | 批量结束后是否写入根目录 `results.json` |
+| **耗时** | | |
+| `timing.enabled` | `true` | 控制台与 JSON 中输出分阶段耗时（整张 = 分解合计 + 其它；详见 `pipeline` 实现） |
 
 ### 本地覆盖示例 (`config/local.yaml`)
 
@@ -238,14 +242,8 @@ ocr:
   - `index`、`class`、`confidence`、`bbox`
   - `text`（全文）、`lines`（行列表）、`orientation`（矫正角度）
   - 异常时包含 `error` 字段
-- **输出文件**：每张图片一个子文件夹，包含：
-  - `yolo_annotated.jpg`：YOLO 标注图
-  - `{i}_process.jpg`：矫正过程可视化（输入ROI → 掩码 → 四角检测 → 透视变换 → 最终图像）
-  - `{i}_rectified.jpg`：方向矫正后的最终图像
-  - `{i}_ocr_boxes.jpg`：OCR 检测框可视化（标注框 + 中文文字 + 置信度色彩编码）
-  - `{i}_ocr.txt`：纯文本
-  - `{i}_result.json`：完整结构化结果
-- **命令行入口**：`python run_ocr.py [images...] [-o output] [--json]`
+- **输出文件**：每张图片一个子文件夹；**始终**写入 `{i}_ocr.txt`、`{i}_result.json`。`yolo_annotated.jpg`、`{i}_process.jpg`、`{i}_rectified.jpg`、`{i}_ocr_boxes.jpg` 仅当 `output.save_debug_images: true` 时写入。
+- **命令行入口**：`python run_ocr.py [images...] [-o output] [--json] [--no-results-json]`（`--json` 与配置任一为真即写 `results.json`；`--no-results-json` 可覆盖配置关闭汇总）
 
 ---
 
@@ -324,11 +322,11 @@ python run_ocr.py
 # 指定图片
 python run_ocr.py 图片1.jpg 图片2.jpg
 
-# 保存汇总 JSON
-python run_ocr.py --json
+# 汇总 results.json（默认开启；可用 output.save_results_json 或 --no-results-json 控制）
+python run_ocr.py --no-results-json
 
 # 指定输出目录
-python run_ocr.py -o my_output --json
+python run_ocr.py -o my_output
 
 # 运行透视校正测试
 python tests/test_rectifier.py
@@ -355,5 +353,5 @@ python tests/test_rectifier.py
 ## 来源说明
 
 - 本项目从 `ultralytics-8.2.0` 仓库的 `ocr_export/` 目录迁移而来
-- YOLO 模型从 `export/export5/best.onnx` 转入 `models/yolo/`
+- YOLO ONNX 放在 `models/yolo/best.onnx`（可由 `model_download_url` 自动拉取）
 - 透视校正模块已在 `ocr_export/tests/` 中验证通过后迁移
