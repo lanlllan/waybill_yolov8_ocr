@@ -102,35 +102,27 @@ class WaybillOCR:
 
     def find_best_orientation(self, image: np.ndarray) -> int:
         """
-        通过整图旋转对比，从 0°/90°/180° 中选择最佳方向。
+        通过整图旋转对比，从 0°/90°/180°/270° 中选择最佳方向。
 
         策略：
-        1. 始终对比 0° 和 180°（整图翻转，不依赖 angle_cls 逐行判断）
-        2. 若图片为横向（h < w×0.8），额外对比 90°
-        3. 0° 作为先验最优方向，其他方向需超出 50% 才会替换
-           （快递单绝大多数正向拍摄，高门槛避免噪声误判）
+        1. 评估 0°、180°、90°、270° 四个候选方向
+        2. 0° 作为先验方向，非 0° 候选需超过 0° 得分的 1.5 倍才参与竞争
+        3. 在满足阈值的候选方向中选择得分最高者，避免候选顺序影响最终结果
 
         评分时关闭 angle_cls（cls=False），确保纯粹对比文字方向的识别质量。
         """
         conf_threshold = 0.7
-        # 0° 优先门槛：其他方向得分需超出 0° 的 50%
         prefer_0_ratio = 1.5
 
         score_0 = self._score_orientation(image, conf_threshold)
         best_angle, best_score = 0, score_0
+        switch_threshold = score_0 * prefer_0_ratio
 
-        score_180 = self._score_orientation(
-            _rotate_image(image, 180), conf_threshold)
-        if score_180 > score_0 * prefer_0_ratio:
-            best_angle, best_score = 180, score_180
-
-        h, w = image.shape[:2]
-        if h < w * 0.8:
-            for angle in [90, 270]:
-                score = self._score_orientation(
-                    _rotate_image(image, angle), conf_threshold)
-                if score > best_score * prefer_0_ratio:
-                    best_angle, best_score = angle, score
+        for angle in [180, 90, 270]:
+            score = self._score_orientation(
+                _rotate_image(image, angle), conf_threshold)
+            if score > switch_threshold and score > best_score:
+                best_angle, best_score = angle, score
 
         return best_angle
 
