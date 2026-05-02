@@ -91,6 +91,13 @@ yolo:
 ocr:
   use_gpu: true
   det_db_thresh: 0.15  # 降低可检测更多模糊文字
+  orientation_conf_threshold: 0.7
+  orientation_early_accept_0: false
+  orientation_high_conf_threshold: 0.9
+  orientation_accept_min_lines: 8
+  orientation_accept_min_score: 80.0
+  orientation_prefer_0_ratio: 1.5
+  orientation_candidate_angles: [180, 90, 270]
 output:
   save_debug_images: true   # 是否保存标注图、rectified、process、ocr_boxes
   save_results_json: true   # 是否在 output 根目录写 results.json

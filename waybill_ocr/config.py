@@ -54,6 +54,28 @@ def _resolve_path(rel_path: str) -> str:
     return str(PROJECT_ROOT / rel_path)
 
 
+def _float_list(value, default: list[float]) -> list[float]:
+    if value is None:
+        return default
+    if isinstance(value, str):
+        value = [x.strip() for x in value.split(",") if x.strip()]
+    try:
+        return [float(x) for x in value]
+    except TypeError:
+        return default
+
+
+def _int_list(value, default: list[int]) -> list[int]:
+    if value is None:
+        return default
+    if isinstance(value, str):
+        value = [x.strip() for x in value.split(",") if x.strip()]
+    try:
+        return [int(x) for x in value]
+    except TypeError:
+        return default
+
+
 def _download_file(url: str, dest: Path, chunk_size: int = 1024 * 1024) -> None:
     """将 url 下载到 dest（先写 .part 再替换，支持大文件）。"""
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -120,6 +142,13 @@ _rect = _cfg.get("rectifier", {})
 RECTIFIER_EPSILON_RATIO = float(_rect.get("epsilon_ratio", 0.02))
 RECTIFIER_USE_CONVEX_HULL = bool(_rect.get("use_convex_hull", True))
 RECTIFIER_MORPH_SIZE = int(_rect.get("morph_size", 7))
+RECTIFIER_MORPH_CLOSE_ITERATIONS = int(_rect.get("morph_close_iterations", 2))
+RECTIFIER_MORPH_OPEN_ITERATIONS = int(_rect.get("morph_open_iterations", 1))
+RECTIFIER_APPROX_RATIO_MULTIPLIERS = _float_list(
+    _rect.get("approx_ratio_multipliers"),
+    [1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0],
+)
+RECTIFIER_BBOX_COVERAGE_THRESHOLD = float(_rect.get("bbox_coverage_threshold", 0.75))
 
 # ============================================================
 # PaddleOCR 配置
@@ -134,6 +163,17 @@ OCR_DET_DB_THRESH = float(_ocr.get("det_db_thresh", 0.2))
 OCR_DET_DB_BOX_THRESH = float(_ocr.get("det_db_box_thresh", 0.4))
 OCR_DET_DB_UNCLIP_RATIO = float(_ocr.get("det_db_unclip_ratio", 1.8))
 ORIENTATION_THUMBNAIL_SIZE = int(_ocr.get("orientation_thumbnail_size", 640))
+ORIENTATION_CONF_THRESHOLD = float(_ocr.get("orientation_conf_threshold", 0.7))
+ORIENTATION_EARLY_ACCEPT_0 = bool(_ocr.get("orientation_early_accept_0", False))
+ORIENTATION_HIGH_CONF_THRESHOLD = float(_ocr.get("orientation_high_conf_threshold", 0.9))
+ORIENTATION_ACCEPT_MIN_LINES = int(_ocr.get("orientation_accept_min_lines", 8))
+ORIENTATION_ACCEPT_MIN_SCORE = float(_ocr.get("orientation_accept_min_score", 80.0))
+ORIENTATION_PREFER_0_RATIO = float(_ocr.get("orientation_prefer_0_ratio", 1.5))
+ORIENTATION_CANDIDATE_ANGLES = _int_list(
+    _ocr.get("orientation_candidate_angles"),
+    [180, 90, 270],
+)
+OCR_LINE_SORT_Y_BUCKET = int(_ocr.get("line_sort_y_bucket", 20))
 
 # ============================================================
 # 输出配置

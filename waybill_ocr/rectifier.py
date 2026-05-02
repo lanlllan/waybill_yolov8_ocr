@@ -76,7 +76,12 @@ def compute_target_size(ordered_pts: np.ndarray) -> tuple:
     return max(width, 1), max(height, 1)
 
 
-def clean_mask(mask: np.ndarray, morph_size: int = 7) -> np.ndarray:
+def clean_mask(
+    mask: np.ndarray,
+    morph_size: int = 7,
+    close_iterations: int = 2,
+    open_iterations: int = 1,
+) -> np.ndarray:
     """
     清理 YOLO 分割输出的掩码。
 
@@ -88,6 +93,8 @@ def clean_mask(mask: np.ndarray, morph_size: int = 7) -> np.ndarray:
     Args:
         mask: 二值掩码 (H, W)，值为 0/1 或 0/255
         morph_size: 形态学核大小，越大平滑效果越强
+        close_iterations: 闭运算迭代次数
+        open_iterations: 开运算迭代次数
 
     Returns:
         清理后的二值掩码 (H, W)，值为 0/255
@@ -99,8 +106,8 @@ def clean_mask(mask: np.ndarray, morph_size: int = 7) -> np.ndarray:
 
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (morph_size, morph_size))
 
-    cleaned = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
-    cleaned = cv2.morphologyEx(cleaned, cv2.MORPH_OPEN, kernel, iterations=1)
+    cleaned = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=close_iterations)
+    cleaned = cv2.morphologyEx(cleaned, cv2.MORPH_OPEN, kernel, iterations=open_iterations)
 
     contours, _ = cv2.findContours(cleaned, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if not contours:
@@ -132,6 +139,7 @@ def _quad_is_convex(pts: np.ndarray) -> bool:
 
 def find_quad_from_mask(mask: np.ndarray, epsilon_ratio: float = 0.02,
                         use_convex_hull: bool = True,
+                        approx_ratio_multipliers: list[float] | None = None,
                         _cleaned: np.ndarray | None = None) -> np.ndarray:
     """
     从二值掩码中提取四边形角点。
@@ -148,6 +156,7 @@ def find_quad_from_mask(mask: np.ndarray, epsilon_ratio: float = 0.02,
         mask: 二值掩码 (H, W)，值为 0/1 或 0/255
         epsilon_ratio: approxPolyDP 精度系数（基础值，会逐步放大）
         use_convex_hull: 是否对轮廓求凸包
+        approx_ratio_multipliers: 多级 approxPolyDP 近似倍率
         _cleaned: 已清理的掩码（内部优化用，外部调用者无需传入）
 
     Returns:
@@ -171,9 +180,9 @@ def find_quad_from_mask(mask: np.ndarray, epsilon_ratio: float = 0.02,
         contour = cv2.convexHull(contour)
 
     peri = cv2.arcLength(contour, True)
-    for ratio in [epsilon_ratio, epsilon_ratio * 1.5, epsilon_ratio * 2.0,
-                  epsilon_ratio * 2.5, epsilon_ratio * 3.0,
-                  epsilon_ratio * 4.0, epsilon_ratio * 5.0]:
+    multipliers = approx_ratio_multipliers or [1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0]
+    for multiplier in multipliers:
+        ratio = epsilon_ratio * multiplier
         approx = cv2.approxPolyDP(contour, ratio * peri, True)
         if len(approx) == 4:
             pts = approx.reshape(4, 2).astype(np.float32)
@@ -260,7 +269,12 @@ def _expand_quad_with_bbox(quad: np.ndarray, bbox: np.ndarray,
 def rectify_from_mask(image: np.ndarray, mask: np.ndarray,
                       bbox: np.ndarray = None,
                       epsilon_ratio: float = 0.02,
-                      use_convex_hull: bool = True) -> dict:
+                      use_convex_hull: bool = True,
+                      morph_size: int = 7,
+                      morph_close_iterations: int = 2,
+                      morph_open_iterations: int = 1,
+                      approx_ratio_multipliers: list[float] | None = None,
+                      bbox_coverage_threshold: float = 0.75) -> dict:
     """
     完整的透视校正流程（一步调用）。
 
@@ -273,6 +287,11 @@ def rectify_from_mask(image: np.ndarray, mask: np.ndarray,
         bbox: YOLO 检测框 [x1, y1, x2, y2]，用于辅助扩展不完整的掩码
         epsilon_ratio: 轮廓近似精度
         use_convex_hull: 是否使用凸包平滑
+        morph_size: 形态学核大小
+        morph_close_iterations: 闭运算迭代次数
+        morph_open_iterations: 开运算迭代次数
+        approx_ratio_multipliers: 多级多边形近似倍率
+        bbox_coverage_threshold: bbox 覆盖率补偿阈值
 
     Returns:
         dict:
@@ -281,11 +300,23 @@ def rectify_from_mask(image: np.ndarray, mask: np.ndarray,
             target_size   - 目标矩形尺寸 (width, height)
             cleaned_mask  - 清理后的掩码
     """
-    cleaned = clean_mask(mask)
-    src_pts = find_quad_from_mask(mask, epsilon_ratio, use_convex_hull, _cleaned=cleaned)
+    cleaned = clean_mask(
+        mask,
+        morph_size=morph_size,
+        close_iterations=morph_close_iterations,
+        open_iterations=morph_open_iterations,
+    )
+    src_pts = find_quad_from_mask(
+        mask,
+        epsilon_ratio,
+        use_convex_hull,
+        approx_ratio_multipliers,
+        _cleaned=cleaned,
+    )
 
     if bbox is not None:
-        src_pts = _expand_quad_with_bbox(src_pts, bbox)
+        src_pts = _expand_quad_with_bbox(
+            src_pts, bbox, coverage_threshold=bbox_coverage_threshold)
 
     width, height = compute_target_size(src_pts)
     rectified = perspective_transform(image, src_pts, (width, height))

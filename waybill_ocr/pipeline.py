@@ -42,6 +42,21 @@ from waybill_ocr.config import (
     OCR_DET_DB_BOX_THRESH,
     OCR_DET_DB_UNCLIP_RATIO,
     ORIENTATION_THUMBNAIL_SIZE,
+    ORIENTATION_CONF_THRESHOLD,
+    ORIENTATION_EARLY_ACCEPT_0,
+    ORIENTATION_HIGH_CONF_THRESHOLD,
+    ORIENTATION_ACCEPT_MIN_LINES,
+    ORIENTATION_ACCEPT_MIN_SCORE,
+    ORIENTATION_PREFER_0_RATIO,
+    ORIENTATION_CANDIDATE_ANGLES,
+    OCR_LINE_SORT_Y_BUCKET,
+    RECTIFIER_EPSILON_RATIO,
+    RECTIFIER_USE_CONVEX_HULL,
+    RECTIFIER_MORPH_SIZE,
+    RECTIFIER_MORPH_CLOSE_ITERATIONS,
+    RECTIFIER_MORPH_OPEN_ITERATIONS,
+    RECTIFIER_APPROX_RATIO_MULTIPLIERS,
+    RECTIFIER_BBOX_COVERAGE_THRESHOLD,
     TIMING_ENABLED,
 )
 import numpy as np
@@ -66,6 +81,14 @@ def _get_ocr_engine():
             det_db_box_thresh=OCR_DET_DB_BOX_THRESH,
             det_db_unclip_ratio=OCR_DET_DB_UNCLIP_RATIO,
             thumbnail_size=ORIENTATION_THUMBNAIL_SIZE,
+            orientation_conf_threshold=ORIENTATION_CONF_THRESHOLD,
+            orientation_early_accept_0=ORIENTATION_EARLY_ACCEPT_0,
+            orientation_high_conf_threshold=ORIENTATION_HIGH_CONF_THRESHOLD,
+            orientation_accept_min_lines=ORIENTATION_ACCEPT_MIN_LINES,
+            orientation_accept_min_score=ORIENTATION_ACCEPT_MIN_SCORE,
+            orientation_prefer_0_ratio=ORIENTATION_PREFER_0_RATIO,
+            orientation_candidate_angles=ORIENTATION_CANDIDATE_ANGLES,
+            line_sort_y_bucket=OCR_LINE_SORT_Y_BUCKET,
         )
     except ImportError:
         logger.warning("PaddleOCR 未安装，使用空 Stub 引擎（OCR 结果将为空）")
@@ -346,7 +369,8 @@ class WaybillPipeline:
         per_item_parts: list[str] = []
 
         def _row_timing(
-            index: int, rectify_ms: float, ocr_ms: float, save_ms: float
+            index: int, rectify_ms: float, ocr_ms: float, save_ms: float,
+            ocr_detail: dict | None = None,
         ) -> dict:
             row = {
                 "segment_ms": segment_ms,
@@ -354,17 +378,56 @@ class WaybillPipeline:
                 "ocr_ms": ocr_ms,
                 "save_and_debug_ms": save_ms,
             }
+            if ocr_detail:
+                row["ocr_orientation_ms"] = ocr_detail.get("orientation_ms", 0.0)
+                row["ocr_orientation_selected_angle"] = ocr_detail.get("orientation_selected_angle", 0)
+                row["ocr_orientation_switch_threshold"] = ocr_detail.get("orientation_switch_threshold", 0.0)
+                row["ocr_orientation_early_accepted"] = ocr_detail.get("orientation_early_accepted", False)
+                row["ocr_orientation_early_accept_reason"] = ocr_detail.get("orientation_early_accept_reason", "")
+                row["ocr_orientation_detail"] = ocr_detail.get("orientation_detail", [])
+                row["ocr_recognition_ms"] = ocr_detail.get("final_ocr_ms", 0.0)
+                row["ocr_total_ms"] = ocr_detail.get("ocr_total_ms", ocr_ms)
             if index == 0:
                 row["read_image_ms"] = read_ms
                 row["prepare_output_dir_ms"] = prepare_ms
                 row["yolo_annotated_save_ms"] = yolo_save_ms
             return row
 
+        def _format_ocr_timing(ocr_ms: float, ocr_detail: dict | None) -> str:
+            if not ocr_detail:
+                return f"OCR {ocr_ms}ms"
+            orientation_ms = ocr_detail.get("orientation_ms", 0.0)
+            final_ocr_ms = ocr_detail.get("final_ocr_ms", 0.0)
+            candidates = ocr_detail.get("orientation_detail", [])
+            angle_parts = []
+            for c in candidates:
+                angle_parts.append(
+                    f"{c.get('angle')}° {c.get('elapsed_ms')}ms"
+                )
+            angle_text = ", ".join(angle_parts)
+            return (
+                f"OCR {ocr_ms}ms "
+                f"(方向总计 {orientation_ms}ms"
+                f"{' [' + angle_text + ']' if angle_text else ''}, "
+                f"最终识别 {final_ocr_ms}ms)"
+            )
+
         for i, det in enumerate(detections):
             ocr_ms = 0.0
             t_rect0 = time.perf_counter()
             try:
-                rect_result = rectify_from_mask(image, det["mask"], bbox=det["bbox"])
+                rect_result = rectify_from_mask(
+                    image,
+                    det["mask"],
+                    bbox=det["bbox"],
+                    epsilon_ratio=RECTIFIER_EPSILON_RATIO,
+                    use_convex_hull=RECTIFIER_USE_CONVEX_HULL,
+                    morph_size=RECTIFIER_MORPH_SIZE,
+                    morph_close_iterations=RECTIFIER_MORPH_CLOSE_ITERATIONS,
+                    morph_open_iterations=RECTIFIER_MORPH_OPEN_ITERATIONS,
+                    approx_ratio_multipliers=RECTIFIER_APPROX_RATIO_MULTIPLIERS,
+                    bbox_coverage_threshold=RECTIFIER_BBOX_COVERAGE_THRESHOLD,
+                )
                 rectified = rect_result["rectified"]
             except Exception as e:
                 rectify_ms = _elapsed_ms(t_rect0, time.perf_counter())
@@ -384,6 +447,7 @@ class WaybillPipeline:
                 save_ms = _elapsed_ms(t_save0, time.perf_counter())
                 if TIMING_ENABLED:
                     item["timing"] = _row_timing(i, rectify_ms, 0.0, save_ms)
+                    self._save_result(sub_dir, i, item)
                     per_item_parts.append(
                         f"#{i} 校正失败 {rectify_ms}ms 写盘 {save_ms}ms"
                     )
@@ -413,6 +477,7 @@ class WaybillPipeline:
                 save_ms = _elapsed_ms(t_save0, time.perf_counter())
                 if TIMING_ENABLED:
                     item["timing"] = _row_timing(i, rectify_ms, ocr_ms, save_ms)
+                    self._save_result(sub_dir, i, item)
                     per_item_parts.append(
                         f"#{i} 校正 {rectify_ms}ms OCR失败 {ocr_ms}ms 写盘 {save_ms}ms"
                     )
@@ -421,6 +486,7 @@ class WaybillPipeline:
             ocr_ms = _elapsed_ms(t_ocr0, time.perf_counter())
             orientation = ocr_result.get("orientation", 0)
             final_image = ocr_result.get("rotated_image", rectified)
+            ocr_timing = ocr_result.get("timing") or {}
 
             item = {
                 "index": i,
@@ -458,11 +524,15 @@ class WaybillPipeline:
 
             save_ms = _elapsed_ms(t_save0, time.perf_counter())
             if TIMING_ENABLED:
-                item["timing"] = _row_timing(i, rectify_ms, ocr_ms, save_ms)
+                item["timing"] = _row_timing(
+                    i, rectify_ms, ocr_ms, save_ms, ocr_timing)
+                self._save_result(sub_dir, i, item)
 
             if TIMING_ENABLED:
                 per_item_parts.append(
-                    f"#{i} 校正 {rectify_ms}ms OCR {ocr_ms}ms 写盘/调试图 {save_ms}ms"
+                    f"#{i} 校正 {rectify_ms}ms "
+                    f"{_format_ocr_timing(ocr_ms, ocr_timing)} "
+                    f"写盘/调试图 {save_ms}ms"
                 )
 
         if TIMING_ENABLED:

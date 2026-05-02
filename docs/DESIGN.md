@@ -93,6 +93,10 @@ output/
 | `rectifier.epsilon_ratio` | `0.02` | 轮廓近似精度系数 |
 | `rectifier.use_convex_hull` | `true` | 是否使用凸包平滑 |
 | `rectifier.morph_size` | `7` | 形态学核大小 |
+| `rectifier.morph_close_iterations` | `2` | 闭运算迭代次数 |
+| `rectifier.morph_open_iterations` | `1` | 开运算迭代次数 |
+| `rectifier.approx_ratio_multipliers` | `[1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0]` | 多级四边形近似倍率 |
+| `rectifier.bbox_coverage_threshold` | `0.75` | bbox 覆盖率补偿阈值 |
 | **PaddleOCR** | | |
 | `ocr.use_angle_cls` | `true` | 启用方向分类（已弃用，实际以整图旋转对比为准） |
 | `ocr.lang` | `"ch"` | 中英文混合 |
@@ -101,6 +105,14 @@ output/
 | `ocr.det_db_box_thresh` | `0.4` | 文本框置信度阈值（低值保留更多候选框） |
 | `ocr.det_db_unclip_ratio` | `1.8` | 文本框扩展系数（大值合并断裂文字） |
 | `ocr.orientation_thumbnail_size` | `640` | 方向矫正时缩略图最长边 |
+| `ocr.orientation_conf_threshold` | `0.7` | 方向评分时纳入统计的文本置信度阈值 |
+| `ocr.orientation_early_accept_0` | `false` | 是否启用 0° 高置信文本提前接受 |
+| `ocr.orientation_high_conf_threshold` | `0.9` | 0° 提前接受统计中的高置信文本阈值 |
+| `ocr.orientation_accept_min_lines` | `8` | 0° 提前接受所需的最低高置信文本行数 |
+| `ocr.orientation_accept_min_score` | `80.0` | 0° 提前接受所需的最低高置信加权得分 |
+| `ocr.orientation_prefer_0_ratio` | `1.5` | 非 0° 方向需超过 0° 得分的倍率 |
+| `ocr.orientation_candidate_angles` | `[180, 90, 270]` | 0° 以外参与评分的候选方向 |
+| `ocr.line_sort_y_bucket` | `20` | OCR 行排序时的纵向分组粒度 |
 | `ocr.model_dir` | `"models/paddleocr"` | PaddleOCR 模型本地缓存路径 |
 | **输出** | | |
 | `output.dir` | `"output"` | 输出目录 |
