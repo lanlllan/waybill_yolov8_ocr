@@ -6,40 +6,86 @@
 
 # ------ YOLO 分割模型 ------
 yolo:
-  model_path: "models/yolo/best.onnx"
-  # 当 model_path 指向的文件不存在时，从此 URL 自动下载（保存到 model_path）
-  model_download_url: "https://github.com/lanlllan/waybill_yolov8_ocr/releases/download/v1.0.1/best.onnx"
+  # YOLOv8-Seg ONNX 模型路径；相对路径会基于项目根目录解析。
+  model_path: "models/yolo/default.onnx"
+  # 当 model_path 指向的文件不存在时，从此 URL 自动下载（保存到 model_path），模型列表：https://github.com/lanlllan/ultralytics-8.2.0/releases/tag/v1.0.0
+  model_download_url: "https://github.com/lanlllan/ultralytics-8.2.0/releases/download/v1.0.0/default.onnx"
+  # 分割置信度阈值；低值会保留更多候选面单，但可能增加误检。
   conf_threshold: 0.5
+  # NMS IoU 阈值；用于合并重叠检测结果，值越大越不容易抑制重叠框。
   iou_threshold: 0.7
-  device: "cpu"          # "cpu" 或 "0"(GPU)
-  imgsz: 960             # ONNX 导出时的输入尺寸
-  auto_install: false    # 禁止 ultralytics 自动安装缺失依赖（如 onnxruntime-gpu）
-  warmup: true           # 流水线启动后对空图跑一次推理，预热模型，防止首次推理时耗时过长
+  # 推理设备；"cpu" 表示 CPU，"0" 表示第 0 块 GPU。
+  device: "cpu"
+  # YOLO 推理输入尺寸；应与 ONNX 导出尺寸保持一致。
+  imgsz: 960
+  # 是否允许 Ultralytics 自动安装缺失依赖；离线或论文复现实验建议关闭。
+  auto_install: false
+  # 是否在流水线启动后用空图预热模型，避免首张图承担 ONNX Runtime 冷启动耗时。
+  warmup: true
 
 # ------ 透视校正 ------
 rectifier:
+  # approxPolyDP 基础近似系数；值越大轮廓越容易被简化为四边形。
   epsilon_ratio: 0.02
+  # 是否先对掩码轮廓求凸包；可削弱边缘凹陷、缺口和突起对角点检测的影响。
   use_convex_hull: true
+  # 形态学椭圆核大小；用于掩码闭运算/开运算，值越大平滑和去噪越强。
   morph_size: 7
+  # 闭运算迭代次数；主要填补掩码内部小孔洞和边缘缝隙。
+  morph_close_iterations: 2
+  # 开运算迭代次数；主要去除小噪点和边缘毛刺。
+  morph_open_iterations: 1
+  # 多级四边形近似倍率；会依次乘以 epsilon_ratio 尝试 approxPolyDP，失败后才使用最小外接矩形兜底。
+  approx_ratio_multipliers: [1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0]
+  # bbox 覆盖率补偿阈值；当掩码角点覆盖范围小于检测框该比例时，用 bbox 四角补偿残缺掩码。
+  bbox_coverage_threshold: 0.75
 
 # ------ PaddleOCR ------
 ocr:
-  model_dir: "models/paddleocr"  # 模型存放根目录（det/rec/cls 子目录自动创建）
+  # PaddleOCR 模型存放根目录；det/rec/cls 子目录会自动创建。
+  model_dir: "models/paddleocr"
+  # 是否初始化 PaddleOCR 方向分类器；当前最终识别调用 cls=False，整图方向由四方向评分负责。
   use_angle_cls: true
+  # OCR 语言模型；"ch" 表示中英文混合识别。
   lang: "ch"
+  # PaddleOCR 是否使用 GPU；CPU 环境下稳定但较慢。
   use_gpu: false
-  det_db_thresh: 0.2          # 文本区域检测阈值（降低可检测更多模糊/遮挡文字）
-  det_db_box_thresh: 0.4      # 文本框置信度阈值（降低可保留更多候选框）
-  det_db_unclip_ratio: 1.8    # 文本框扩展系数（增大可合并被遮挡断裂的文字）
+  # DB 文本区域二值化阈值；降低可检测更多模糊/遮挡文字，但可能增加噪声文本框。
+  det_db_thresh: 0.2
+  # 文本框置信度阈值；降低可保留更多候选框，但可能增加误识别。
+  det_db_box_thresh: 0.4
+  # 文本框扩展系数；增大可合并断裂文字，过大可能导致相邻文本粘连。
+  det_db_unclip_ratio: 1.8
+  # 方向评分时的缩略图最长边；越小速度越快，但方向判断可能不稳定。
   orientation_thumbnail_size: 640
+  # 方向评分时纳入统计的文本行置信度阈值；低于该值的识别结果不计入方向得分。
+  orientation_conf_threshold: 0.7
+  # 是否启用 0° 高置信文本提前接受；开启后若 0° 已足够可信，则跳过其它方向评分以降低耗时。
+  orientation_early_accept_0: false
+  # 0° 提前接受使用的高置信文本阈值；只有置信度不低于该值的文本行才计入高置信统计。
+  orientation_high_conf_threshold: 0.9
+  # 0° 提前接受所需的最低高置信文本行数；用于避免少量偶然识别结果触发提前退出。
+  orientation_accept_min_lines: 8
+  # 0° 提前接受所需的最低高置信加权得分；得分按 confidence * 文本长度累加。
+  orientation_accept_min_score: 80.0
+  # 非 0° 候选方向需要超过 0° 得分的倍率；用于避免噪声导致正向图片被误旋转。
+  orientation_prefer_0_ratio: 1.5
+  # 0° 以外参与评分的候选方向；程序会先评估 0°，再按此列表评估其它方向。
+  orientation_candidate_angles: [180, 90, 270]
+  # OCR 行排序时的纵向分组粒度；用于把 y 坐标接近的文本框归为同一行。
+  line_sort_y_bucket: 20
 
 # ------ 输出 ------
 output:
+  # 输出目录；每张输入图会在该目录下生成同名子目录。
   dir: "output"
+  # 是否保存调试图，包括 YOLO 标注图、校正图、过程图和 OCR 框图；开启会增加写盘耗时。
   save_debug_images: false
-  save_results_json: true   # 批量处理结束后写入 output/results.json（汇总）；可用 --no-results-json 临时关闭
+  # 是否在输出根目录写入批量汇总 results.json；可用命令行 --no-results-json 临时关闭。
+  save_results_json: true
 
 # ------ 耗时统计（毫秒）------
 # 开启后：控制台打印各阶段耗时（整张 = 分解合计 + 其它微隙）；timing 写入 JSON（index=0 含读图/目录/标注图保存）
 timing:
+  # 是否启用分阶段耗时统计；开启后会打印控制台计时并写入单项 JSON 的 timing 字段。
   enabled: true
